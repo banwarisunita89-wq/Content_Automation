@@ -1,0 +1,198 @@
+{
+  "categories": [
+    {
+      "id": "cinematography",
+      "label": "Cinematography",
+      "description": "High-fidelity render directives injected into every generation request",
+      "icon": "Film",
+      "controls": [
+        {
+          "id": "hdr_mode",
+          "label": "Ultra HD HDR Mode",
+          "type": "toggle",
+          "default": true,
+          "description": "Premium HDR color grading with extended dynamic range"
+        },
+        {
+          "id": "fps_60",
+          "label": "60 FPS Frame Rate",
+          "type": "toggle",
+          "default": true,
+          "description": "Smooth motion interpolation at 60 frames per second"
+        },
+        {
+          "id": "bokeh",
+          "label": "Heavy Cinematic Bokeh",
+          "type": "toggle",
+          "default": true,
+          "description": "Strict depth-of-field with heavy bokeh accents"
+        },
+        {
+          "id": "resolution",
+          "label": "Target Resolution",
+          "type": "select",
+          "options": ["1080p", "1440p", "4K"],
+          "default": "4K"
+        },
+        {
+          "id": "color_space",
+          "label": "Color Space",
+          "type": "select",
+          "options": ["Rec.709", "Rec.2020 HDR", "DCI-P3"],
+          "default": "Rec.2020 HDR"
+        },
+        {
+          "id": "bitrate",
+          "label": "Bitrate (Mbps)",
+          "type": "number",
+          "min": 10,
+          "max": 100,
+          "step": 5,
+          "default": 45
+        }
+      ]
+    },
+    {
+      "id": "identity_lock",
+      "label": "Identity Lock",
+      "description": "Strict vector locks for facial proportion consistency across all generated frames",
+      "icon": "Scan",
+      "controls": [
+        {
+          "id": "eye_spacing",
+          "label": "Eye Spacing",
+          "type": "number",
+          "min": 20,
+          "max": 60,
+          "step": 0.5,
+          "default": 34,
+          "unit": "mm",
+          "locked": true
+        },
+        {
+          "id": "nose_width",
+          "label": "Nose Width",
+          "type": "number",
+          "min": 15,
+          "max": 50,
+          "step": 0.5,
+          "default": 28,
+          "unit": "mm",
+          "locked": true
+        },
+        {
+          "id": "jawline_structure",
+          "label": "Jawline Structure",
+          "type": "number",
+          "min": 80,
+          "max": 180,
+          "step": 1,
+          "default": 128,
+          "unit": "degrees",
+          "locked": true
+        },
+        {
+          "id": "forehead_height",
+          "label": "Forehead Height",
+          "type": "number",
+          "min": 40,
+          "max": 100,
+          "step": 1,
+          "default": 65,
+          "unit": "mm"
+        },
+        {
+          "id": "lip_thickness",
+          "label": "Lip Thickness",
+          "type": "number",
+          "min": 5,
+          "max": 25,
+          "step": 0.5,
+          "default": 12,
+          "unit": "mm"
+        },
+        {
+          "id": "cheekbone_width",
+          "label": "Cheekbone Width",
+          "type": "number",
+          "min": 25,
+          "max": 65,
+          "step": 0.5,
+          "default": 42,
+          "unit": "mm"
+        },
+        {
+          "id": "identity_enforcer",
+          "label": "Cinematic Identity Protocol Enforcer",
+          "type": "toggle",
+          "default": true,
+          "description": "Locks facial proportions via strict reference parameters in every generation request"
+        }
+      ]
+    },
+    {
+      "id": "legacy_engine",
+      "label": "Legacy Engine",
+      "description": "Tribute preset system for honoring figures with systemic thematic injection",
+      "icon": "Heart",
+      "controls": [
+        {
+          "id": "tribute_enabled",
+          "label": "Enable Tribute Mode",
+          "type": "toggle",
+          "default": false,
+          "description": "Activates the Legacy Engine for tribute content generation"
+        },
+        {
+          "id": "tribute_name",
+          "label": "Honoree Name",
+          "type": "text",
+          "default": "Lakhan Singh Banwari",
+          "placeholder": "Enter full name of the honored figure"
+        },
+        {
+          "id": "theme_taakat",
+          "label": "Taakat (Strength) Theme Injection",
+          "type": "toggle",
+          "default": true,
+          "description": "Systemically injects themes of strength and resilience into narrative generation"
+        },
+        {
+          "id": "theme_prerna",
+          "label": "Prerna (Inspiration) Theme Injection",
+          "type": "toggle",
+          "default": true,
+          "description": "Systemically injects themes of inspiration and legacy into narrative generation"
+        },
+        {
+          "id": "closing_sequence",
+          "label": "Closing Sequence Format",
+          "type": "select",
+          "options": [
+            "With Love, Your Family",
+            "With Love, Your Family — In Loving Memory",
+            "With Love, Your Family — Forever in Our Hearts"
+          ],
+          "default": "With Love, Your Family"
+        },
+        {
+          "id": "tribute_tone",
+          "label": "Tribute Tone",
+          "type": "select",
+          "options": ["Reverent", "Celebratory", "Reflective", "Heroic"],
+          "default": "Reverent"
+        },
+        {
+          "id": "tribute_intensity",
+          "label": "Thematic Intensity",
+          "type": "number",
+          "min": 1,
+          "max": 10,
+          "step": 1,
+          "default": 7,
+          "description": "Controls how prominently tribute themes are woven into the narrative"
+        }
+      ]
+    }
+  ]
+}
