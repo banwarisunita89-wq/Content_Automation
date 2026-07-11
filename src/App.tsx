@@ -1,5 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { Layout } from './components/Layout';
 import { AuthScreen } from './components/AuthScreen';
@@ -77,6 +78,7 @@ export default function App() {
         ) : (
           <AppContent />
         )}
+        <SpeedInsights />
       </QueryClientProvider>
     </ErrorBoundary>
   );
