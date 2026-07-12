@@ -161,10 +161,8 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
 
   const setActiveModule = useNavStore((s) => s.setActiveModule);
   const setSpotlight = useNavStore((s) => s.setSpotlight);
-
   const addToast = useToastStore((s) => s.addToast);
-  const hasGeminiKey = useApiVaultStore((s) => s.hasKey('gemini_api_key'));
-
+  
   // React Query
   const { data: seriesList = [], isLoading: seriesLoading } = useSeriesQuery();
   const { data: episodes = [], isLoading: episodesLoading } = useEpisodesQuery(seriesId);
