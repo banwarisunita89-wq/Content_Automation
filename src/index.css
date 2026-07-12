@@ -4,6 +4,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  body {
+    @apply bg-black text-white;
+    background-color: #000000;
+  }
+}
 :root {
   --accent: #18181b;
   --accent-glow: rgba(24, 24, 27, 0.25);
@@ -23,7 +29,7 @@ html {
 }
 
 body {
-  background-color: #09090b;
+  background-color: #000000;
   color: #e4e4e7;
   font-family: 'Inter', system-ui, sans-serif;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
