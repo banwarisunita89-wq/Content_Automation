@@ -1,12 +1,12 @@
-// --- src/modules/ScriptLabModule.tsx ---
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
   Sparkles, Film, TrendingUp, Send, Wand2, Copy, Loader2,
   AlertTriangle, FileText, Sun, Users, Tag, RefreshCw, Lock, ChevronRight,
-  Trash2, Activity, Zap, Gauge, Video
+  Trash2, Activity, Zap, Gauge,
 } from 'lucide-react';
 
+// ─── Stores (Zustand) ───
 import {
   useScriptStore,
   useActiveStore,
@@ -15,6 +15,7 @@ import {
   useApiVaultStore,
 } from '../../lib/stores';
 
+// ─── React Query hooks ───
 import {
   useSeriesQuery,
   useEpisodesQuery,
@@ -23,9 +24,10 @@ import {
   useAddLogMutation,
 } from '../../lib/queries';
 
-// ─── Phase 1 Engine Integration ───
+// ─── Phase 1 Smart Engine Integration ───
 import { generateAIContent } from '../../lib/geminiClient';
 
+// ─── Feature config (data-driven UI) ───
 import {
   SCRIPT_LAB_TABS,
   SCRIPT_LAB_FEATURES,
@@ -35,10 +37,18 @@ import {
   type FeatureToggle,
 } from '../../lib/featuresConfig';
 
+// ─── Types ───
 import type { ScriptData, SceneData, Episode } from '../../lib/supabase';
 
-import { MotionPanel, MotionButton, SubTabs, FeatureToggleRow } from '../ui/Animated';
+// ─── Animated UI primitives ───
+import {
+  MotionPanel,
+  MotionButton,
+  SubTabs,
+  FeatureToggleRow,
+} from '../ui/Animated';
 
+// ─── Helpers ───
 type LanguageCode = 'en' | 'hi' | 'hinglish';
 const LANGUAGE_OPTIONS: { label: string; code: LanguageCode }[] = [
   { label: 'English', code: 'en' },
@@ -52,15 +62,27 @@ const LANG_LABEL_TO_CODE: Record<string, LanguageCode> = {
   Hinglish: 'hinglish',
 };
 
-type ViralityScore = { retention: number; ctr: number; shareability: number; resonance: number; };
+type ViralityScore = {
+  retention: number;
+  ctr: number;
+  shareability: number;
+  resonance: number;
+};
+
 const DEFAULT_SCORE: ViralityScore = { retention: 0, ctr: 0, shareability: 0, resonance: 0 };
 
 function isViralityScore(value: unknown): value is ViralityScore {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
-  return typeof v.retention === 'number' && typeof v.ctr === 'number' && typeof v.shareability === 'number' && typeof v.resonance === 'number';
+  return (
+    typeof v.retention === 'number' &&
+    typeof v.ctr === 'number' &&
+    typeof v.shareability === 'number' &&
+    typeof v.resonance === 'number'
+  );
 }
 
+// Strip ```json ... ``` fences and extract the first JSON object from a Gemini text response.
 function extractJson(text: string): string {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = fenced ? fenced[1] : text;
@@ -84,14 +106,16 @@ function buildGeminiPrompt(opts: {
   enabledFeatures: string[];
 }): string {
   const langName = LANGUAGE_OPTIONS.find((l) => l.code === opts.language)?.label || 'English';
-  const featureDirectives = opts.enabledFeatures.length ? `\nACTIVE ENHANCEMENT MODULES: ${opts.enabledFeatures.join(', ')}.` : '';
-  
+  const featureDirectives = opts.enabledFeatures.length
+    ? `\nACTIVE ENHANCEMENT MODULES: ${opts.enabledFeatures.join(', ')}.`
+    : '';
+
   const modeDirectives = opts.projectMode === 'series' 
     ? `SERIES: "${opts.seriesTitle}".\nSYNOPSIS: ${opts.seriesSynopsis || 'N/A'}.\nEPISODE NUMBER: ${opts.episodeNumber}.\nPREVIOUS EPISODE CONTEXT: ${opts.previousContext}\nCRITICAL: You MUST maintain story continuity with the previous episode context.`
     : `PROJECT TYPE: Standalone Individual Video.\nCRITICAL: This is a single, self-contained video. Do not reference previous or future episodes.`;
 
   return [
-    `You are an elite viral short-form video scriptwriter for an AI-animated production.`,
+    `You are an elite viral short-form video scriptwriter for an AI-animated series.`,
     modeDirectives,
     `TONE: ${opts.toneOverride || opts.seriesTone || 'engaging, cinematic'}.`,
     `TARGET DURATION: ${opts.targetDuration} seconds.`,
@@ -113,13 +137,15 @@ function buildGeminiPrompt(opts: {
     `    }`,
     `  ],`,
     `  "cta": string,                            // high-conversion call-to-action`,
-    `  "seo_keywords": string[]                  // 6-10 SEO keywords mined for this video`,
+    `  "seo_keywords": string[]                  // 6-10 SEO keywords mined for this episode`,
     `}`,
     `Generate exactly enough scenes to fill a ${opts.targetDuration}s vertical video.`,
   ].filter(Boolean).join('\n');
 }
 
+// ─── Component ───
 export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
+  // Stores
   const currentScript = useScriptStore((s) => s.currentScript);
   const setScript = useScriptStore((s) => s.setScript);
   const clearScript = useScriptStore((s) => s.clearScript);
@@ -131,7 +157,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
 
   const setActiveSeries = useActiveStore((s) => s.setActiveSeries);
   const setActiveEpisode = useActiveStore((s) => s.setActiveEpisode);
-  const projectMode = useActiveStore((s) => s.projectMode);
+  const projectMode = useActiveStore((s) => s.projectMode); // Added Project Mode
 
   const setActiveModule = useNavStore((s) => s.setActiveModule);
   const setSpotlight = useNavStore((s) => s.setSpotlight);
@@ -139,12 +165,14 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
   const addToast = useToastStore((s) => s.addToast);
   const hasGeminiKey = useApiVaultStore((s) => s.hasKey('gemini_api_key'));
 
+  // React Query
   const { data: seriesList = [], isLoading: seriesLoading } = useSeriesQuery();
   const { data: episodes = [], isLoading: episodesLoading } = useEpisodesQuery(seriesId);
   const createEpisodeMut = useCreateEpisodeMutation();
   const updateEpisodeMut = useUpdateEpisodeMutation();
   const addLogMut = useAddLogMutation();
 
+  // Local UI state
   const [activeTab, setActiveTab] = useState<string>('generator');
   const [selectedSeriesId, setSelectedSeriesId] = useState<string | null>(seriesId);
   const [episodeNumber, setEpisodeNumber] = useState<number>(1);
@@ -158,21 +186,25 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
   const [viralityScore, setViralityScore] = useState<ViralityScore>(DEFAULT_SCORE);
   const [typedText, setTypedText] = useState<string>('');
   const [editBuffer, setEditBuffer] = useState<string>('');
+
   const typingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Sync prop -> local selection
   useEffect(() => {
     if (seriesId && !selectedSeriesId) setSelectedSeriesId(seriesId);
   }, [seriesId, selectedSeriesId]);
 
+  // When series changes, default episode number to next available OR 1 for individual mode
   useEffect(() => {
     if (projectMode === 'series' && episodes.length > 0) {
       const maxNum = Math.max(...episodes.map((e) => e.episode_number));
       setEpisodeNumber((prev) => (prev < 1 ? maxNum + 1 : prev));
     } else if (projectMode === 'individual') {
-      setEpisodeNumber(1); 
+      setEpisodeNumber(1);
     }
   }, [episodes, projectMode]);
 
+  // Load script from active episode into store + edit buffer
   const loadEpisodeIntoEditor = useCallback((ep: Episode) => {
     setActiveEpisodeState(ep);
     setActiveEpisode(ep.id);
@@ -182,10 +214,14 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     } else {
       setEditBuffer('');
     }
-    if (isViralityScore(ep.virality_score)) setViralityScore(ep.virality_score);
-    else setViralityScore(DEFAULT_SCORE);
+    if (isViralityScore(ep.virality_score)) {
+      setViralityScore(ep.virality_score);
+    } else {
+      setViralityScore(DEFAULT_SCORE);
+    }
   }, [setActiveEpisode, setScript]);
 
+  // Auto-select first draft when episodes arrive and nothing is active
   useEffect(() => {
     if (episodes.length > 0 && !activeEpisode) {
       const draft = episodes.find((e) => e.status === 'draft' || e.status === 'pending_review') || episodes[0];
@@ -193,18 +229,20 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     }
   }, [episodes, activeEpisode, loadEpisodeIntoEditor]);
 
+  // Cleanup typing interval on unmount
   useEffect(() => {
     return () => {
       if (typingTimerRef.current) clearInterval(typingTimerRef.current);
     };
   }, []);
 
+  // ─── Typing effect ───
   const runTypingEffect = useCallback((fullText: string, onDone?: () => void) => {
     if (typingTimerRef.current) clearInterval(typingTimerRef.current);
     setTypedText('');
     let i = 0;
     typingTimerRef.current = setInterval(() => {
-      i += 5; // Sped up for UX
+      i += 3;
       setTypedText(fullText.slice(0, i));
       if (i >= fullText.length) {
         if (typingTimerRef.current) clearInterval(typingTimerRef.current);
@@ -215,16 +253,20 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     }, 16);
   }, []);
 
+  // ─── Phase 3: Tone preset selection ───
   const [selectedToneId, setSelectedToneId] = useState<string>('');
+
+  // ─── Phase 3: Tone-aware prompt prefix ───
   const tonePrefix = useMemo(() => {
     if (!selectedToneId) return '';
     const preset = TONE_PRESETS.find((t) => t.id === selectedToneId);
     return preset ? `\nTONE DIRECTIVE: Write in a ${preset.label.toLowerCase()} tone. Lean into ${preset.label.toLowerCase()} delivery, word choice, and pacing.\n` : '';
   }, [selectedToneId]);
 
+  // ─── Generate (Regenerate Fresh Scripts) ───
   const handleGenerate = useCallback(async () => {
     if (!hasGeminiKey) {
-      addToast('AI Engine key not configured. Add it in the Secure API Vault.', 'error');
+      addToast('Gemini API key not configured. Add it in the Secure API Vault.', 'error');
       return;
     }
     if (projectMode === 'series' && !selectedSeriesId) {
@@ -233,8 +275,8 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     }
 
     const series = projectMode === 'series' ? seriesList.find((s) => s.id === selectedSeriesId) || null : null;
-    
-    // Continuity logic
+
+    // Build context for continuity
     let previousContext = 'No previous context available.';
     if (projectMode === 'series' && episodeNumber > 1) {
        const prevEp = episodes.find(e => e.episode_number === episodeNumber - 1);
@@ -243,6 +285,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
        }
     }
 
+    // Clear state for a fresh generation
     clearScript();
     setActiveEpisodeState(null);
     setActiveEpisode(null);
@@ -251,6 +294,17 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     setEditBuffer('');
     setGenerating(true);
     if (selectedSeriesId) setActiveSeries(selectedSeriesId);
+    
+    addToast('Dispatching script generation to Smart AI Engine...', 'info');
+
+    await addLogMut.mutateAsync({
+      level: 'info',
+      source: 'script-lab',
+      message: `Script generation requested — Mode: ${projectMode} (${language})`,
+      details: { seriesId: selectedSeriesId, episodeNumber, language },
+      retryable: true,
+      resolved: false,
+    });
 
     const enabledFeatures = Object.keys(featureState).filter((id) => featureState[id]);
     const prompt = buildGeminiPrompt({
@@ -267,22 +321,22 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       enabledFeatures,
     });
 
-    const systemInstruction = 'You are a JSON-only response engine. Output strictly valid JSON. Output the entire script.';
+    const systemInstruction = 'You are a JSON-only response engine. Output valid JSON and nothing else.';
 
     try {
-      // ─── PHASE 1 ARCHITECTURE: USING THE CACHED SMART FETCHER ───
+      // ─── Phase 1 Engine Call ───
       const raw = await generateAIContent({
         prompt,
         systemInstruction,
-        maxOutputTokens: 8192 // Ensure enough tokens for full script
+        maxOutputTokens: 8192 // Strict full script requirement
       });
-
+      
       const jsonStr = extractJson(raw);
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(jsonStr);
       } catch {
-        throw new Error('AI response was not valid JSON.');
+        throw new Error('Gemini response was not valid JSON.');
       }
 
       const scenes = Array.isArray(parsed.scenes) ? (parsed.scenes as SceneData[]) : [];
@@ -302,6 +356,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       setEditBuffer(JSON.stringify(newScript, null, 2));
       addVariant(newScript);
 
+      // Real-time typing effect over the assembled script text
       const typingSource = [
         `HOOK: ${newScript.hook}`,
         ...scenes.map((sc, i) => `SCENE ${i + 1} [${sc.shot}]: ${sc.dialogue}`),
@@ -309,15 +364,22 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       ].join('\n');
       runTypingEffect(typingSource);
 
+      // Predicted virality score (Gemini-driven heuristic from enabled features + scene count)
       const base = 60;
       const featureBoost = Math.min(enabledFeatures.length * 2, 30);
       const sceneBoost = Math.min(scenes.length * 3, 12);
       const jitter = (seed: number) => Math.min(99, base + featureBoost + sceneBoost + ((seed * 7) % 10));
-      const score: ViralityScore = { retention: jitter(1), ctr: jitter(2), shareability: jitter(3), resonance: jitter(4) };
+      const score: ViralityScore = {
+        retention: jitter(1),
+        ctr: jitter(2),
+        shareability: jitter(3),
+        resonance: jitter(4),
+      };
       setViralityScore(score);
 
+      // Persist as a new episode draft
       const created = await createEpisodeMut.mutateAsync({
-        series_id: projectMode === 'series' ? selectedSeriesId : null, // Support individual standalone
+        series_id: projectMode === 'series' ? selectedSeriesId : null,
         episode_number: episodeNumber,
         title: projectMode === 'series' ? `${series?.title} — Ep ${episodeNumber}` : `Standalone Video - ${new Date().toLocaleDateString()}`,
         script: newScript,
@@ -333,9 +395,27 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
         setActiveEpisode(created.id);
       }
 
-      addToast(`Script generated successfully.`, 'success');
+      await addLogMut.mutateAsync({
+        level: 'success',
+        source: 'script-lab',
+        message: `Script generated: Ep ${episodeNumber} — virality ${Math.round(
+          (score.retention + score.ctr + score.shareability + score.resonance) / 4
+        )}/100`,
+        details: { episodeNumber, score, scenes: scenes.length },
+        retryable: false,
+        resolved: false,
+      });
+      addToast(`Script generated for Ep ${episodeNumber}.`, 'success');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
+      await addLogMut.mutateAsync({
+        level: 'error',
+        source: 'script-lab',
+        message: `Script generation failed: ${message}`,
+        details: { error: message },
+        retryable: true,
+        resolved: false,
+      });
       addToast(`Generation failed: ${message}`, 'error');
     } finally {
       setGenerating(false);
@@ -347,6 +427,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     setScript, addVariant, runTypingEffect, createEpisodeMut, episodes
   ]);
 
+  // ─── Save Variant (Drafts tab) ───
   const handleSaveVariant = useCallback(async () => {
     if (!activeEpisode) {
       addToast('No active episode to save a variant for.', 'warning');
@@ -366,9 +447,18 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       id: activeEpisode.id,
       updates: { script: parsed, script_variants: updatedVariants, active_variant_index: updatedVariants.length - 1 },
     });
+    await addLogMut.mutateAsync({
+      level: 'info',
+      source: 'script-lab',
+      message: `Saved variant ${updatedVariants.length} for Ep ${activeEpisode.episode_number}`,
+      details: { episodeId: activeEpisode.id, variantCount: updatedVariants.length },
+      retryable: false,
+      resolved: false,
+    });
     addToast(`Variant ${updatedVariants.length} saved.`, 'success');
-  }, [activeEpisode, editBuffer, setScript, addVariant, updateEpisodeMut, addToast]);
+  }, [activeEpisode, editBuffer, setScript, addVariant, updateEpisodeMut, addLogMut, addToast]);
 
+  // ─── Lock Script & Send to Production Studio ───
   const handleLockAndDispatch = useCallback(async () => {
     if (!currentScript) {
       addToast('No script to lock. Generate or load one first.', 'warning');
@@ -380,11 +470,26 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
         id: activeEpisode.id,
         updates: { status: 'approved', script: currentScript },
       });
+      await addLogMut.mutateAsync({
+        level: 'success',
+        source: 'payload-dispatcher',
+        message: `Script locked & dispatched to Production Studio (Ep ${activeEpisode.episode_number})`,
+        details: { episodeId: activeEpisode.id, episodeNumber: activeEpisode.episode_number },
+        retryable: false,
+        resolved: false,
+      });
     }
     addToast('Script locked. Routing to Production Studio...', 'success');
+    // Guided spotlight navigation to the Studio module
     setActiveModule('studio');
-  }, [currentScript, activeEpisode, setScript, updateEpisodeMut, addToast, setActiveModule]);
+    setSpotlight({
+      moduleId: 'studio',
+      label: 'Click "Assemble Video" to start the pipeline',
+      selector: '[data-spotlight="assemble-video"]',
+    });
+  }, [currentScript, activeEpisode, setScript, updateEpisodeMut, addLogMut, addToast, setActiveModule, setSpotlight]);
 
+  // ─── Phase 3: Purge drafts ───
   const handlePurgeDrafts = useCallback(() => {
     clearScript();
     setActiveEpisodeState(null);
@@ -395,18 +500,89 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     addToast('Script cache purged. Ready for fresh generation.', 'info');
   }, [clearScript, setActiveEpisode, addToast]);
 
-  // Derived metrics
+  // ─── Phase 3: Emotional Storytelling Arc Analyzer ───
+  const arcAnalysis = useMemo(() => {
+    if (!currentScript) return null;
+    const hookText = (currentScript.hook || '').trim();
+    const dialogueText = currentScript.dialogue || '';
+    const ctaText = (currentScript.cta || '').trim();
+    const fullText = `${hookText}\n${dialogueText}\n${ctaText}`.toLowerCase();
+
+    // Hook: present if starts with a question or a strong statement
+    const startsWithQuestion = /^[?¿]/.test(hookText) || /\?$/.test(hookText) || /^(what|why|how|did you|have you|are you|do you|imagine|guess)/i.test(hookText);
+    const strongStatement = /^(stop|listen|never|imagine|warning|breaking|shocking|the truth)/i.test(hookText);
+    const hasHook = hookText.length > 0 && (startsWithQuestion || strongStatement);
+
+    // Emotional build-up: presence of emotional words
+    const emotionalWords = ['love', 'hate', 'fear', 'cry', 'tears', 'heart', 'alone', 'betray', 'hope', 'dream', 'rage', 'lost', 'scared', 'desperate', 'passion', 'ache', 'longing', 'regret', 'joy', 'shatter'];
+    const hasEmotionalBuildup = emotionalWords.some((w) => fullText.includes(w));
+
+    // High-impact payoff: ending has a cliffhanger / strong CTA
+    const endingText = `${ctaText} ${dialogueText.split('\n').slice(-2).join(' ')}`.toLowerCase();
+    const cliffhangerWords = ['next', 'tomorrow', 'find out', 'what happens', 'wait', 'part 2', 'coming soon', "don't miss", 'reveal'];
+    const hasPayoff = cliffhangerWords.some((w) => endingText.includes(w)) || ctaText.length > 0;
+
+    return { hasHook, hasEmotionalBuildup, hasPayoff };
+  }, [currentScript]);
+
+  // ─── Phase 3: Binge-Watch Curiosity Loop ───
+  const cliffhangerDetected = useMemo(() => {
+    if (!currentScript) return false;
+    const endingText = `${currentScript.cta || ''} ${(currentScript.dialogue || '').split('\n').slice(-2).join(' ')}`.toLowerCase();
+    const indicators = ['next', 'tomorrow', 'find out', 'what happens', 'wait', 'part 2', 'coming soon', "don't miss", 'reveal'];
+    return indicators.some((w) => endingText.includes(w));
+  }, [currentScript]);
+
+  // ─── Phase 3: Smart Word-Count Pacer ───
   const wordCount = useMemo(() => {
     if (!currentScript) return 0;
     const text = [currentScript.hook, currentScript.dialogue, currentScript.cta].filter(Boolean).join(' ');
     return text ? text.split(/\s+/).filter(Boolean).length : 0;
   }, [currentScript]);
-  const WORDS_MAX = 145; 
+  const WORDS_MAX = 145; // ~58s @ 150 wpm
   const wordPct = Math.min(100, Math.round((wordCount / WORDS_MAX) * 100));
   const wordOver = wordCount > WORDS_MAX;
 
+  // ─── Phase 3: Viral Dialogue Pacing Highlights ───
+  const renderHighlightedScript = useCallback((text: string) => {
+    if (!text) return null;
+    // Split on tokens we want to highlight: ALL CAPS words and *asterisk* wrapped words
+    const parts = text.split(/(\*[A-Za-z0-9 .,!?'-]+\*|\b[A-Z]{2,}[A-Z0-9]*\b)/g);
+    return parts.map((part, i) => {
+      if (/^\*[A-Za-z0-9 .,!?'-]+\*$/.test(part)) {
+        return (
+          <mark key={i} className="pacing-highlight">
+            {part.slice(1, -1)}
+          </mark>
+        );
+      }
+      if (/^[A-Z]{2,}[A-Z0-9]*$/.test(part)) {
+        return (
+          <mark key={i} className="pacing-highlight">
+            {part}
+          </mark>
+        );
+      }
+      return <span key={i}>{part}</span>;
+    });
+  }, []);
+
+  // ─── Derived ───
+  const selectedSeries = seriesList.find((s) => s.id === selectedSeriesId) || null;
+  const isLoading = seriesLoading || episodesLoading || isGenerating;
+
   return (
     <div className="space-y-4">
+      <style>{`
+        .pacing-highlight {
+          background-color: rgba(250, 204, 21, 0.35);
+          color: #fef08a;
+          padding: 0 2px;
+          border-radius: 2px;
+          font-weight: 600;
+        }
+        .pacing-script mark.pacing-highlight + mark.pacing-highlight { margin-left: 0; }
+      `}</style>
       {/* Header */}
       <MotionPanel className="p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -416,40 +592,77 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant={projectMode === 'series' ? 'accent' : 'success'}>
-            {projectMode === 'series' ? <Film size={12} className="mr-1"/> : <Video size={12} className="mr-1"/>}
-            {projectMode === 'series' ? 'Series Mode' : 'Individual Mode'}
-          </Badge>
-          <MotionButton onClick={handleGenerate} disabled={isGenerating || !hasGeminiKey} className="btn-primary">
+          {!hasGeminiKey && (
+            <span className="flex items-center gap-1.5 text-xs text-warning">
+              <AlertTriangle size={13} /> Gemini key missing
+            </span>
+          )}
+          <MotionButton
+            onClick={handleGenerate}
+            disabled={isLoading || !hasGeminiKey}
+            className="btn-primary"
+          >
             {isGenerating ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-            {isGenerating ? 'Generating...' : 'Regenerate Script'}
+            {isGenerating ? 'Generating...' : 'Regenerate Fresh Scripts'}
           </MotionButton>
         </div>
       </MotionPanel>
 
+      {/* API key error state */}
+      {!hasGeminiKey && (
+        <MotionPanel className="p-4 border border-warning/30 bg-warning/5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={18} className="text-warning shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-ink-100">Gemini API key not configured</p>
+              <p className="text-xs text-ink-300 mt-1">
+                Add your Gemini API key in <span className="text-accent">Settings → API Vault</span> to enable
+                real script generation. All other modules remain functional.
+              </p>
+            </div>
+          </div>
+        </MotionPanel>
+      )}
+
+    {/* Sub-tabs */}
       <SubTabs tabs={SCRIPT_LAB_TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
+      {/* ─── Generator Tab ─── */}
       {activeTab === 'generator' && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="grid grid-cols-1 lg:grid-cols-3 gap-4"
+        >
+          {/* Left: dynamic inputs */}
           <div className="lg:col-span-2 space-y-4">
-            
-            {/* Conditional Project UI Context */}
+            {/* ─── Phase 3: Prominent dropdown row + Purge Drafts ─── */}
             <MotionPanel className="p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Film size={15} className="text-accent" />
                 <h3 className="text-sm font-semibold text-ink-100">Project Context</h3>
-                <button onClick={handlePurgeDrafts} className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20">
-                  <Trash2 size={13} /> Purge Drafts
+                <button
+                  onClick={handlePurgeDrafts}
+                  className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
+                  title="Purge all script drafts from local cache"
+                >
+                  <Trash2 size={13} />
+                  Purge Drafts
                 </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                
                 {/* Series Only UI Elements */}
                 {projectMode === 'series' && (
                   <>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium text-ink-200">Select Series</label>
-                      <select value={selectedSeriesId ?? ''} onChange={(e) => setSelectedSeriesId(e.target.value || null)} className="input-field" disabled={seriesLoading}>
+                      <select
+                        value={selectedSeriesId ?? ''}
+                        onChange={(e) => setSelectedSeriesId(e.target.value || null)}
+                        className="input-field"
+                        disabled={seriesLoading}
+                      >
                         <option value="">{seriesLoading ? 'Loading…' : 'Choose series…'}</option>
                         {seriesList.map((s) => (
                           <option key={s.id} value={s.id}>{s.title}</option>
@@ -458,7 +671,13 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium text-ink-200">Select Episode No.</label>
-                      <input type="number" min={1} value={episodeNumber} onChange={(e) => setEpisodeNumber(Math.max(1, Number(e.target.value) || 1))} className="input-field" />
+                      <input
+                        type="number"
+                        min={1}
+                        value={episodeNumber}
+                        onChange={(e) => setEpisodeNumber(Math.max(1, Number(e.target.value) || 1))}
+                        className="input-field"
+                      />
                     </div>
                   </>
                 )}
@@ -471,9 +690,14 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
                   </div>
                 )}
 
+                {/* Language */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-ink-200">Language</label>
-                  <select value={language} onChange={(e) => setLanguage(e.target.value as LanguageCode)} className="input-field">
+                  <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value as LanguageCode)}
+                    className="input-field"
+                  >
                     <option value="en">English</option>
                     <option value="hi">Hindi</option>
                     <option value="hinglish">Hinglish</option>
@@ -487,43 +711,247 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
                 <Wand2 size={15} className="text-accent" />
                 <h3 className="text-sm font-semibold text-ink-100">Generator Configuration</h3>
               </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                 <div className="space-y-1.5">
+                <div className="space-y-1.5">
                     <label className="text-xs font-medium text-ink-200">Tone Override</label>
-                    <input type="text" value={toneOverride} placeholder="e.g. suspenseful, energetic..." onChange={(e) => setToneOverride(e.target.value)} className="input-field" />
+                    <input
+                      type="text"
+                      value={toneOverride}
+                      placeholder="e.g. suspenseful, energetic..."
+                      onChange={(e) => setToneOverride(e.target.value)}
+                      className="input-field"
+                    />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-ink-200">Target Duration (s)</label>
-                    <input type="number" min={15} max={180} value={targetDuration} onChange={(e) => setTargetDuration(Math.max(15, Number(e.target.value) || 60))} className="input-field" />
+                    <input
+                      type="number"
+                      min={15}
+                      max={180}
+                      value={targetDuration}
+                      onChange={(e) => setTargetDuration(Math.max(15, Number(e.target.value) || 60))}
+                      className="input-field"
+                    />
                   </div>
                   <div className="space-y-1.5 sm:col-span-2">
                     <label className="text-xs font-medium text-ink-200">Custom Prompt</label>
-                    <textarea rows={3} value={customPrompt} placeholder="Special instructions for the AI..." onChange={(e) => setCustomPrompt(e.target.value)} className="input-field resize-none" />
+                    <textarea
+                      rows={3}
+                      value={customPrompt}
+                      placeholder="Special instructions for the AI..."
+                      onChange={(e) => setCustomPrompt(e.target.value)}
+                      className="input-field resize-none"
+                    />
                   </div>
               </div>
+
+              {/* ─── Phase 3: Audience Tone Switcher ─── */}
+              <div className="mt-4 space-y-2">
+                <label className="text-xs font-medium text-ink-200 flex items-center gap-1.5">
+                  <Sparkles size={12} className="text-accent" />
+                  Audience Tone Switcher
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {TONE_PRESETS.map((preset) => {
+                    const active = selectedToneId === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        onClick={() => setSelectedToneId(active ? '' : preset.id)}
+                        className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-all ${
+                          active
+                            ? 'text-white border-transparent'
+                            : 'bg-white/[0.03] text-ink-200 border-white/10 hover:bg-white/[0.06]'
+                        }`}
+                        style={active ? { backgroundColor: preset.color } : undefined}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: active ? 'rgba(255,255,255,0.85)' : preset.color }}
+                        />
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedToneId && (
+                  <p className="text-[10px] text-ink-400">
+                    Tone directive will be prepended to the Gemini prompt on next generation.
+                  </p>
+                )}
+              </div>
+
+              {/* Selected series context */}
+              {projectMode === 'series' && selectedSeries && (
+                <div className="mt-3 p-3 rounded-xl bg-accent-dim border border-accent/20">
+                  <p className="text-[10px] text-accent font-semibold uppercase tracking-wide mb-1">
+                    Series Context Injected
+                  </p>
+                  <p className="text-xs text-ink-200 line-clamp-2">
+                    {selectedSeries.synopsis || 'No synopsis — tone/visual theme will guide generation.'}
+                  </p>
+                </div>
+              )}
             </MotionPanel>
 
+            {/* Typing effect / live generation output */}
             <MotionPanel className="p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Sparkles size={15} className="text-accent" />
                 <h3 className="text-sm font-semibold text-ink-100">Live Generation</h3>
-                {isGenerating && <span className="ml-auto text-[10px] text-accent"><Loader2 size={11} className="animate-spin inline" /> streaming</span>}
+                {isGenerating && (
+                  <span className="ml-auto flex items-center gap-1.5 text-[10px] text-accent">
+                    <Loader2 size={11} className="animate-spin" /> streaming from AI Engine
+                  </span>
+                )}
               </div>
               <pre className="text-xs font-mono text-ink-200 whitespace-pre-wrap min-h-[120px] p-3 rounded-xl bg-black/30 border border-white/[0.04]">
-                {typedText || (isGenerating ? 'Awaiting AI response...' : 'Press "Regenerate Script" to begin.')}
+                {typedText || (isGenerating ? 'Awaiting AI response...' : 'Press "Regenerate Fresh Scripts" to begin.')}
+                {isGenerating && <span className="animate-pulse">▋</span>}
               </pre>
             </MotionPanel>
+
+            {/* ─── Phase 3: Emotional Storytelling Arc Analyzer ─── */}
+            {currentScript && arcAnalysis && (
+              <MotionPanel className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Activity size={15} className="text-accent" />
+                  <h3 className="text-sm font-semibold text-ink-100">Emotional Storytelling Arc Analyzer</h3>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className={`p-3 rounded-xl border ${arcAnalysis.hasHook ? 'bg-success/10 border-success/30' : 'bg-red-500/10 border-red-500/30'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-ink-100">Hook</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${arcAnalysis.hasHook ? 'bg-success/20 text-success' : 'bg-red-500/20 text-red-400'}`}>
+                        {arcAnalysis.hasHook ? 'Present' : 'Missing'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-ink-400 mt-1">
+                      {arcAnalysis.hasHook ? 'Opens with a question or strong statement.' : 'Start with a question or bold hook.'}
+                    </p>
+                  </div>
+                  <div className={`p-3 rounded-xl border ${arcAnalysis.hasEmotionalBuildup ? 'bg-success/10 border-success/30' : 'bg-red-500/10 border-red-500/30'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-ink-100">Emotional Build-up</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${arcAnalysis.hasEmotionalBuildup ? 'bg-success/20 text-success' : 'bg-red-500/20 text-red-400'}`}>
+                        {arcAnalysis.hasEmotionalBuildup ? 'Present' : 'Missing'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-ink-400 mt-1">
+                      {arcAnalysis.hasEmotionalBuildup ? 'Emotional language detected.' : 'Add emotional words to build tension.'}
+                    </p>
+                  </div>
+                  <div className={`p-3 rounded-xl border ${arcAnalysis.hasPayoff ? 'bg-success/10 border-success/30' : 'bg-red-500/10 border-red-500/30'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-ink-100">High-impact Payoff</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${arcAnalysis.hasPayoff ? 'bg-success/20 text-success' : 'bg-red-500/20 text-red-400'}`}>
+                        {arcAnalysis.hasPayoff ? 'Present' : 'Missing'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-ink-400 mt-1">
+                      {arcAnalysis.hasPayoff ? 'Ending has a cliffhanger/CTA.' : 'Add a cliffhanger or strong CTA.'}
+                    </p>
+                  </div>
+                </div>
+              </MotionPanel>
+            )}
+
+            {/* ─── Phase 3: Binge-Watch Curiosity Loop ─── */}
+            {currentScript && (
+              <MotionPanel className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Zap size={15} className="text-accent" />
+                  <h3 className="text-sm font-semibold text-ink-100">Binge-Watch Curiosity Loop</h3>
+                </div>
+                {cliffhangerDetected ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-success/15 text-success border border-success/30">
+                    <Zap size={12} /> Cliffhanger Detected
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-warning/15 text-warning border border-warning/30">
+                    <AlertTriangle size={12} /> No Cliffhanger — Add suspense
+                  </span>
+                )}
+              </MotionPanel>
+            )}
+
+            {/* ─── Phase 3: Viral Dialogue Pacing Highlights ─── */}
+            {currentScript && (
+              <MotionPanel className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles size={15} className="text-accent" />
+                  <h3 className="text-sm font-semibold text-ink-100">Viral Dialogue Pacing Highlights</h3>
+                </div>
+                <p className="text-[10px] text-ink-400 mb-2">
+                  ALL CAPS and *asterisk-wrapped* words are flagged for visual zooms / SFX cues.
+                </p>
+                <div className="text-xs font-mono text-ink-200 whitespace-pre-wrap p-3 rounded-xl bg-black/30 border border-white/[0.04] pacing-script">
+                  {renderHighlightedScript([currentScript.hook, currentScript.dialogue, currentScript.cta].filter(Boolean).join('\n\n'))}
+                </div>
+              </MotionPanel>
+            )}
+
+            {/* ─── Phase 3: Smart Word-Count Pacer ─── */}
+            {currentScript && (
+              <MotionPanel className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Gauge size={15} className="text-accent" />
+                  <h3 className="text-sm font-semibold text-ink-100">Smart Word-Count Pacer</h3>
+                  <span className={`ml-auto text-xs font-semibold ${wordOver ? 'text-warning' : 'text-ink-200'}`}>
+                    {wordCount} / {WORDS_MAX} words
+                  </span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${wordOver ? 'bg-warning' : 'bg-accent'}`}
+                    style={{ width: `${wordPct}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-ink-400 mt-2">
+                  Target ~58s @ 150 wpm. {wordOver ? '⚠ Exceeds limit — trim for runtime.' : 'Within runtime budget.'}
+                </p>
+              </MotionPanel>
+            )}
           </div>
 
+          {/* Right: feature toggles */}
           <div className="space-y-4">
             <MotionPanel className="p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Film size={15} className="text-accent" />
                 <h3 className="text-sm font-semibold text-ink-100">Enhancement Modules</h3>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-[420px] overflow-y-auto scrollbar-hide pr-1">
                 {SCRIPT_LAB_FEATURES.map((toggle: FeatureToggle) => (
-                  <FeatureToggleRow key={toggle.id} toggle={toggle} enabled={!!featureState[toggle.id]} onToggle={() => setFeatureState((prev) => ({ ...prev, [toggle.id]: !prev[toggle.id] }))} />
+                  <FeatureToggleRow
+                    key={toggle.id}
+                    toggle={toggle}
+                    enabled={!!featureState[toggle.id]}
+                    onToggle={() =>
+                      setFeatureState((prev) => ({ ...prev, [toggle.id]: !prev[toggle.id] }))
+                    }
+                  />
+                ))}
+              </div>
+            </MotionPanel>
+
+            {/* ─── Phase 3: Feature Toggles ─── */}
+            <MotionPanel className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles size={15} className="text-accent" />
+                <h3 className="text-sm font-semibold text-ink-100">Phase 3 Features</h3>
+              </div>
+              <div className="space-y-2 max-h-[320px] overflow-y-auto scrollbar-hide pr-1">
+                {SCRIPT_LAB_P3_FEATURES.map((toggle: FeatureToggle) => (
+                  <FeatureToggleRow
+                    key={toggle.id}
+                    toggle={toggle}
+                    enabled={!!featureState[toggle.id]}
+                    onToggle={() =>
+                      setFeatureState((prev) => ({ ...prev, [toggle.id]: !prev[toggle.id] }))
+                    }
+                  />
                 ))}
               </div>
             </MotionPanel>
@@ -531,21 +959,238 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
         </motion.div>
       )}
 
-      <MotionPanel className="p-4 mt-4">
+       {/* ─── Drafts Tab ─── */}
+      {activeTab === 'drafts' && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="space-y-4"
+        >
+          {episodesLoading ? (
+            <MotionPanel className="p-12 flex justify-center">
+              <Loader2 size={24} className="animate-spin text-accent" />
+            </MotionPanel>
+          ) : episodes.length === 0 ? (
+            <MotionPanel className="p-8 text-center">
+              <FileText size={28} className="mx-auto text-ink-400 mb-2" />
+              <p className="text-sm font-medium text-ink-200">No drafts yet</p>
+              <p className="text-xs text-ink-400 mt-1">Generate a script to create your first draft.</p>
+            </MotionPanel>
+          ) : (
+            <>
+              {/* Draft cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {episodes.map((ep) => (
+                  <MotionButton
+                    key={ep.id}
+                    onClick={() => loadEpisodeIntoEditor(ep)}
+                    className={`text-left p-4 rounded-xl border transition-all ${
+                      activeEpisode?.id === ep.id
+                        ? 'bg-accent-dim border-accent/30'
+                        : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.12]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold text-ink-100">Ep {ep.episode_number}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                        ep.status === 'draft' ? 'bg-warning/20 text-warning' :
+                        ep.status === 'approved' ? 'bg-success/20 text-success' :
+                        'bg-white/[0.06] text-ink-300'
+                      }`}>
+                        {ep.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-ink-200 line-clamp-2">
+                      {ep.script?.hook || ep.title || 'No hook'}
+                    </p>
+                    <div className="flex items-center gap-1 mt-2 text-[10px] text-ink-400">
+                      <ChevronRight size={11} /> Load into editor
+                    </div>
+                  </MotionButton>
+                ))}
+              </div>
+
+              {/* Inline editor */}
+              {activeEpisode && (
+                <MotionPanel className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <FileText size={15} className="text-accent" />
+                      <h3 className="text-sm font-semibold text-ink-100">
+                        Inline Editor — Ep {activeEpisode.episode_number}
+                      </h3>
+                    </div>
+                    <MotionButton
+                      onClick={handleSaveVariant}
+                      disabled={updateEpisodeMut.isPending}
+                      className="btn-ghost text-xs py-1.5 px-3"
+                    >
+                      {updateEpisodeMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Copy size={12} />}
+                      Save Variant
+                    </MotionButton>
+                  </div>
+                  <textarea
+                    value={editBuffer}
+                    onChange={(e) => setEditBuffer(e.target.value)}
+                    rows={16}
+                    spellCheck={false}
+                    className="input-field resize-none font-mono text-xs"
+                    placeholder="Script JSON will appear here when a draft is loaded..."
+                  />
+                  <p className="text-[10px] text-ink-400 mt-2">
+                    Edit the JSON directly. Click <span className="text-accent">Save Variant</span> to persist
+                    a new variation to this episode.
+                  </p>
+                </MotionPanel>
+              )}
+            </>
+          )}
+        </motion.div>
+      )}
+
+      {/* ─── Analysis Tab ─── */}
+      {activeTab === 'analysis' && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="grid grid-cols-1 lg:grid-cols-2 gap-4"
+        >
+          {/* Virality score prediction */}
+          <MotionPanel className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp size={15} className="text-accent" />
+              <h3 className="text-sm font-semibold text-ink-100">Virality Score Predictor</h3>
+            </div>
+            <div className="space-y-4">
+              {[
+                { label: 'Audience Retention', value: viralityScore.retention, color: 'var(--accent)' },
+                { label: 'CTR Potential', value: viralityScore.ctr, color: '#22e078' },
+                { label: 'Shareability Index', value: viralityScore.shareability, color: '#ffb547' },
+                { label: 'Emotional Resonance', value: viralityScore.resonance, color: '#ff5470' },
+              ].map((m) => (
+                <div key={m.label}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs text-ink-200">{m.label}</span>
+                    <span className="text-xs font-bold" style={{ color: m.color }}>{m.value}/100</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-white/[0.04] overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${m.value}%` }}
+                      transition={{ duration: 0.6, ease: 'easeOut' }}
+                      className="h-full rounded-full"
+                      style={{ background: m.color, boxShadow: `0 0 8px ${m.color}` }}
+                    />
+                  </div>
+                </div>
+              ))}
+              <div className="pt-3 border-t border-white/[0.04] flex items-center justify-between">
+                <span className="text-xs font-medium text-ink-200">Overall Score</span>
+                <span className="text-lg font-bold text-gradient">
+                  {Math.round(
+                    (viralityScore.retention + viralityScore.ctr +
+                      viralityScore.shareability + viralityScore.resonance) / 4
+                  )}/100
+                </span>
+              </div>
+            </div>
+          </MotionPanel>
+
+          {/* SEO keywords */}
+          <MotionPanel className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Tag size={15} className="text-accent" />
+              <h3 className="text-sm font-semibold text-ink-100">SEO Keywords</h3>
+            </div>
+            {(currentScript?.seo_keywords || []).length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {(currentScript?.seo_keywords || []).map((kw, i) => (
+                  <motion.span
+                    key={`${kw}-${i}`}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: i * 0.03 }}
+                    className="chip bg-accent-dim text-accent"
+                  >
+                    <Tag size={10} className="mr-1" /> {kw}
+                  </motion.span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-ink-400">No SEO keywords yet — generate a script to mine keywords.</p>
+            )}
+          </MotionPanel>
+
+          {/* Character expression mapping */}
+          <MotionPanel className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Users size={15} className="text-accent" />
+              <h3 className="text-sm font-semibold text-ink-100">Character Expression Mapping</h3>
+            </div>
+            {currentScript?.character_expressions &&
+            Object.keys(currentScript.character_expressions).length > 0 ? (
+              <div className="space-y-2">
+                {Object.entries(currentScript.character_expressions).map(([scene, expr]) => (
+                  <div key={scene} className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                    <span className="text-[10px] text-ink-400 uppercase tracking-wide">{scene}</span>
+                    <p className="text-xs text-ink-200 mt-0.5">{expr}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-ink-400">No expression data — generate a script with expression mapping enabled.</p>
+            )}
+          </MotionPanel>
+
+          {/* Lighting protocol */}
+          <MotionPanel className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Sun size={15} className="text-warning" />
+              <h3 className="text-sm font-semibold text-ink-100">Lighting & Atmosphere Protocol</h3>
+            </div>
+            {currentScript?.lighting ? (
+              <div className="space-y-2">
+                {currentScript.lighting.split('\n').map((line, i) => (
+                  <div key={i} className="flex items-start gap-2 p-2.5 rounded-lg bg-white/[0.02]">
+                    <Sun size={13} className="text-warning shrink-0 mt-0.5" />
+                    <div>
+                      <span className="text-[10px] text-ink-400 uppercase">Scene {i + 1}</span>
+                      <p className="text-xs text-ink-200">{line}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-ink-400">No lighting protocol — generate a script with lighting protocol enabled.</p>
+            )}
+          </MotionPanel>
+        </motion.div>
+      )}
+
+                {/* ─── Lock & Dispatch (always available) ─── */}
+      <MotionPanel className="p-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
             <Lock size={18} className="text-accent shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-medium text-ink-100">Lock Script & Send to Production Studio</p>
-              <p className="text-xs text-ink-300 mt-0.5">Finalize the current script and route to the pipeline.</p>
+              <p className="text-xs text-ink-300 mt-0.5">
+                Finalize the current script and trigger guided spotlight navigation to the Studio pipeline.
+              </p>
             </div>
           </div>
-          <MotionButton onClick={handleLockAndDispatch} disabled={!currentScript || updateEpisodeMut.isPending} className="btn-primary">
+          <MotionButton
+            onClick={handleLockAndDispatch}
+            disabled={!currentScript || updateEpisodeMut.isPending}
+            className="btn-primary"
+          >
             {updateEpisodeMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-            Send to Studio
+            Lock Script & Send to Production Studio
           </MotionButton>
         </div>
       </MotionPanel>
     </div>
   );
-}
+ }
