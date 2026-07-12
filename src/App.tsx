@@ -69,7 +69,7 @@ export default function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         {!initialized ? (
-          <div className="min-h-screen flex items-center justify-center" style={{ background: '#0B0C10' }}>
+          <div className="min-h-screen w-full bg-black text-gray-100 overflow-x-hidden">}}>
             <div className="text-ink-400 text-sm">Loading...</div>
           </div>
         ) : !session ? (
