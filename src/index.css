@@ -4,12 +4,7 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  body {
-    @apply bg-black text-white;
-    background-color: #000000;
-  }
-}
+
 :root {
   --accent: #18181b;
   --accent-glow: rgba(24, 24, 27, 0.25);
