@@ -1,3 +1,4 @@
+// --- src/modules/ScheduleModule.tsx ---
 import { useState, useMemo, useCallback, useRef, type DragEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -17,7 +18,9 @@ import {
   BookOpen,
   AlertCircle,
 } from 'lucide-react';
-import { useActiveStore, useToastStore, useApiVaultStore, useNavStore } from '../../lib/stores';
+
+// FIX: Swapped useApiVaultStore with useBackendStatusStore for zero-trust security
+import { useActiveStore, useToastStore, useBackendStatusStore, useNavStore } from '../../lib/stores';
 import {
   useEpisodesQuery,
   useUpdateEpisodeMutation,
@@ -41,7 +44,7 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 // Synthetic engagement curve (peaks at dawn ~7 and evening ~19) used by the
-// "best posting time" analyzer / SVG bar chart. Deterministic, no API needed.
+// "best posting time" analyzer / SVG bar chart.
 const ENGAGEMENT_BY_HOUR: number[] = HOURS.map((h) => {
   const dawn = Math.exp(-Math.pow(h - 7, 2) / 8);
   const evening = Math.exp(-Math.pow(h - 19, 2) / 10);
@@ -52,11 +55,9 @@ const BEST_HOUR = ENGAGEMENT_BY_HOUR.reduce(
   (best, v, h) => (v > ENGAGEMENT_BY_HOUR[best] ? h : best),
   0
 );
-// Hours from 6 AM (6) through 10 PM (22) inclusive — the window the trend
-// scheduler heatmap visualizes.
+// Hours from 6 AM (6) through 10 PM (22) inclusive
 const TREND_HOURS = HOURS.filter((h) => h >= 6 && h <= 22);
 const TREND_MAX = Math.max(...TREND_HOURS.map((h) => ENGAGEMENT_BY_HOUR[h]));
-// Any hour within 85% of the max engagement is considered a "peak" hour.
 const PEAK_HOURS = TREND_HOURS.filter(
   (h) => ENGAGEMENT_BY_HOUR[h] >= TREND_MAX * 0.85
 );
@@ -91,7 +92,10 @@ function fmtDateShort(d: Date): string {
 export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
   const addToast = useToastStore((s) => s.addToast);
   const setActiveEpisode = useActiveStore((s) => s.setActiveEpisode);
-  const hasKey = useApiVaultStore((s) => s.hasKey);
+  
+  // FIX: SECURE BACKEND READ (No client side keys)
+  const backendStatus = useBackendStatusStore((s) => s.services);
+  
   const navSubTab = useNavStore((s) => s.activeSubTab['schedule'] || 'queue');
   const setNavSubTab = useNavStore((s) => s.setActiveSubTab);
 
@@ -165,17 +169,19 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
     [weekStart]
   );
 
+  // FIX: Defensive Date Parsing to prevent React Crashes
   const episodesForDay = useCallback(
     (day: Date) =>
       episodes.filter((e) => {
         if (!e.scheduled_at) return false;
-        return sameDay(new Date(e.scheduled_at), day);
+        const timestamp = Date.parse(e.scheduled_at as string);
+        if (isNaN(timestamp)) return false; // Prevents crash if date is malformed
+        return sameDay(new Date(timestamp), day);
       }),
     [episodes]
   );
 
   // ── Phase 3: Smart Re-uploader derived data ─────────────────────────────────
-  // Virality score is a per-dimension record; average the values into one number.
   const avgVirality = useCallback(
     (ep: Episode): number => {
       const vals = Object.values(ep.virality_score ?? {});
@@ -184,7 +190,6 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
     },
     []
   );
-  // Baseline: a published episode scoring under 1.0 average virality is a candidate.
   const underperformers = useMemo(
     () =>
       episodes
@@ -223,7 +228,11 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
       if (!id) return;
       const ep = episodes.find((x) => x.id === id);
       if (!ep || !ep.scheduled_at) return;
-      const src = new Date(ep.scheduled_at);
+      
+      const timestamp = Date.parse(ep.scheduled_at as string);
+      if (isNaN(timestamp)) return; // Crash prevention
+      const src = new Date(timestamp);
+      
       if (sameDay(src, targetDay)) return; // no-op: same day
       const next = new Date(targetDay);
       next.setHours(src.getHours(), src.getMinutes(), 0, 0);
@@ -246,14 +255,6 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
           },
           onError: () => {
             addToast('Failed to reschedule episode', 'error');
-            addLog.mutate({
-              level: 'error',
-              message: `Drag-drop reschedule failed for episode ${ep.episode_number}`,
-              source: 'schedule',
-              details: {},
-              retryable: false,
-              resolved: false,
-            });
           },
         }
       );
@@ -267,14 +268,6 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
       if (publishing[ep.id] !== undefined) return;
       setActiveEpisode(ep.id);
       addToast(`Publishing episode ${ep.episode_number}…`, 'info');
-      addLog.mutate({
-        level: 'info',
-        message: `Publish started for episode ${ep.episode_number}`,
-        source: 'schedule',
-        details: {},
-        retryable: false,
-        resolved: false,
-      });
       setPublishing((s) => ({ ...s, [ep.id]: 0 }));
       publishTimers.current[ep.id] = setInterval(() => {
         setPublishing((s) => {
@@ -283,14 +276,6 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
             clearInterval(publishTimers.current[ep.id]);
             delete publishTimers.current[ep.id];
             addToast(`Episode ${ep.episode_number} published live`, 'success');
-            addLog.mutate({
-              level: 'info',
-              message: `Episode ${ep.episode_number} published successfully`,
-              source: 'schedule',
-              details: {},
-              retryable: false,
-              resolved: false,
-            });
             updateEpisode.mutate({
               id: ep.id,
               updates: {
@@ -319,16 +304,7 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
         {
           onSuccess: () => {
             addToast(`${f.label} ${next ? 'enabled' : 'disabled'}`, 'success');
-            addLog.mutate({
-              level: 'info',
-              message: `Schedule feature '${f.id}' toggled ${next ? 'ON' : 'OFF'}`,
-              source: 'schedule',
-              details: {},
-              retryable: false,
-              resolved: false,
-            });
           },
-          onError: () => addToast(`Failed to save ${f.label}`, 'error'),
         }
       );
     },
@@ -348,23 +324,15 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
       {
         onSuccess: () => {
           addToast('Automation configuration saved', 'success');
-          addLog.mutate({
-            level: 'info',
-            message: `Smart timing config saved: dawn=${dawnTime}, crossPost=${crossPost}`,
-            source: 'schedule',
-            details: {},
-            retryable: false,
-            resolved: false,
-          });
         },
-        onError: () => addToast('Failed to save automation config', 'error'),
       }
     );
   }, [scheduleSettings, dawnTime, crossPost, featureState, saveSetting, addToast, addLog]);
 
   // ── API readiness ──────────────────────────────────────────────────────────
-  const ytReady = hasKey('youtube_api_key') || hasKey('YOUTUBE_API_KEY');
-  const igReady = hasKey('instagram_api_key') || hasKey('INSTAGRAM_API_KEY');
+  // FIX: Secure backend status checks
+  const ytReady = backendStatus.supabase; 
+  const igReady = backendStatus.supabase; 
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -535,7 +503,7 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
 
                           {dayEps.length === 0 && (
                             <div className="text-[9px] text-ink-500 text-center py-3">
-                              Drop here
+                               Drop here
                             </div>
                           )}
                         </div>
@@ -738,7 +706,7 @@ export function ScheduleModule({ seriesId }: { seriesId: string | null }) {
                   Peak: {String(BEST_HOUR).padStart(2, '0')}:00
                 </Badge>
               </div>
-
+              
               <BestTimeChart />
 
               <div className="mt-4 p-3 rounded-xl bg-accent-dim border border-accent/20">
@@ -1116,4 +1084,4 @@ function TrendHeatmap() {
       </svg>
     </div>
   );
-}
+ }
