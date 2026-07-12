@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosError } from 'axios';
 import { useToastStore } from './stores';
 
-const MAX_RETRIES = 2;
+const MAX_RETRIES = 0;
 const BASE_DELAY = 1000;
 
 type RetryConfig = {
