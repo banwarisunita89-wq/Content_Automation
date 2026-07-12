@@ -167,7 +167,7 @@ export const useVideoStore = create<VideoState>()(
     setPipelineStep: (step) => set({ pipelineStep: step }),
   })
 );
-
+ 
 // ─── Navigation / Spotlight Store ───
 type SpotlightTarget = {
   moduleId: string;
