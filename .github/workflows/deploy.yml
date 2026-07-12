@@ -26,3 +26,6 @@ jobs:
       - name: Deploy Function
         run: supabase functions deploy api-gemini --project-ref $PROJECT_ID
         
+        - name: Build
+        run: CI=false npm run build
+        
