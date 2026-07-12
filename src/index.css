@@ -4,7 +4,6 @@
 @tailwind components;
 @tailwind utilities;
 
-
 :root {
   --accent: #18181b;
   --accent-glow: rgba(24, 24, 27, 0.25);
