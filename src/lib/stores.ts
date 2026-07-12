@@ -1,6 +1,7 @@
+// --- src/store/useStore.ts ---
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Episode, ScriptData } from './supabase';
+import type { Episode, ScriptData } from './supabase'; // Ensure this matches your actual types
 
 // ─── Theme Store ───
 type ThemeState = {
@@ -34,7 +35,7 @@ export const useThemeStore = create<ThemeState>()(
   )
 );
 
-// ─── API Status Store (server-side credentials, no client keys) ───
+// ─── API Status Store (Fixed to allow local overrides via Settings) ───
 type ApiStatusState = {
   keys: Record<string, string>;
   setKey: (key: string, value: string) => void;
@@ -43,18 +44,58 @@ type ApiStatusState = {
   hasKey: (key: string) => boolean;
 };
 
-export const useApiVaultStore = create<ApiStatusState>(() => ({
-  keys: {},
-  setKey: () => {},
-  removeKey: () => {},
-  getKey: () => undefined,
-  hasKey: () => true,
+export const useApiVaultStore = create<ApiStatusState>()(
+  persist(
+    (set, get) => ({
+      keys: {},
+      setKey: (key, value) => set((s) => ({ keys: { ...s.keys, [key]: value } })),
+      removeKey: (key) => set((s) => {
+        const newKeys = { ...s.keys };
+        delete newKeys[key];
+        return { keys: newKeys };
+      }),
+      getKey: (key) => get().keys[key],
+      hasKey: (key) => !!get().keys[key],
+    }),
+    { name: 'api-vault-store' }
+  )
+);
+
+// ─── AI Cache & Lock Store (NEW: Prevents duplicate generations) ───
+type AiCacheState = {
+  cache: Record<string, string>; // prompt hash -> generated text
+  activeRequests: Set<string>;   // active prompt hashes
+  setCache: (hash: string, result: string) => void;
+  addRequest: (hash: string) => void;
+  removeRequest: (hash: string) => void;
+  hasCache: (hash: string) => boolean;
+  isRequesting: (hash: string) => boolean;
+};
+
+export const useAiCacheStore = create<AiCacheState>()((set, get) => ({
+  cache: {},
+  activeRequests: new Set(),
+  setCache: (hash, result) => set((s) => ({ cache: { ...s.cache, [hash]: result } })),
+  addRequest: (hash) => set((s) => {
+    const next = new Set(s.activeRequests);
+    next.add(hash);
+    return { activeRequests: next };
+  }),
+  removeRequest: (hash) => set((s) => {
+    const next = new Set(s.activeRequests);
+    next.delete(hash);
+    return { activeRequests: next };
+  }),
+  hasCache: (hash) => !!get().cache[hash],
+  isRequesting: (hash) => get().activeRequests.has(hash),
 }));
 
 // ─── Active Series / Episode Store ───
 type SeriesState = {
   activeSeriesId: string | null;
   activeEpisodeId: string | null;
+  projectMode: 'series' | 'individual'; // Fix: Added mode tracking for UI conditional rendering
+  setProjectMode: (mode: 'series' | 'individual') => void;
   setActiveSeries: (id: string | null) => void;
   setActiveEpisode: (id: string | null) => void;
 };
@@ -64,6 +105,8 @@ export const useActiveStore = create<SeriesState>()(
     (set) => ({
       activeSeriesId: null,
       activeEpisodeId: null,
+      projectMode: 'series',
+      setProjectMode: (mode) => set({ projectMode: mode }),
       setActiveSeries: (id) => set({ activeSeriesId: id }),
       setActiveEpisode: (id) => set({ activeEpisodeId: id }),
     }),
@@ -158,9 +201,9 @@ export const useNavStore = create<NavState>()(
 type SystemState = {
   panicActive: boolean;
   zenMode: boolean;
-  timelineStage: number; // 0=Script, 1=Render, 2=Captions, 3=Scheduled
+  timelineStage: number; 
   timeSavedMinutes: number;
-  systemBadges: Record<string, boolean>; // module id -> has activity
+  systemBadges: Record<string, boolean>;
   soundFxEnabled: boolean;
   triggerPanic: () => void;
   clearPanic: () => void;
@@ -211,8 +254,9 @@ export const useToastStore = create<ToastState>()(
       set((s) => ({ toasts: [...s.toasts, { id, message, type, attempt }] }));
       setTimeout(() => {
         set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-      }, 4000);
+      }, 4000); // UI Polish: Standardized toast time to 4s
     },
     removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   })
 );
+    
