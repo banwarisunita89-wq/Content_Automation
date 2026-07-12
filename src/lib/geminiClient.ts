@@ -1,5 +1,5 @@
 // --- src/lib/geminiClient.ts ---
-import { useAiCacheStore, useToastStore } from '../store/useStore';
+import { useAiCacheStore, useToastStore } from './stores';
 import { supabase } from './supabase'; // Adjust import based on your setup
 
 interface GenerateParams {
