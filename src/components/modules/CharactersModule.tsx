@@ -1,13 +1,14 @@
+// --- src/modules/CharactersModule.tsx ---
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users, Scan, Mic, Shirt, Plus, X, Save, User, Lock, Volume2,
-  AlertTriangle, Trash2, Check,
+  AlertTriangle, Trash2, Check, Download, Palette, Sliders, Maximize
 } from 'lucide-react';
-import { Download, Palette, Sliders, Maximize } from 'lucide-react';
 
 // ─── Stores ───
-import { useActiveStore, useToastStore, useApiVaultStore } from '../../lib/stores';
+// FIX: Swapped useApiVaultStore with useBackendStatusStore for zero-trust security
+import { useActiveStore, useToastStore, useBackendStatusStore } from '../../lib/stores';
 
 // ─── React Query hooks ───
 import {
@@ -26,8 +27,9 @@ import {
   COSTUME_FIELDS,
   type FeatureToggle,
   type FeatureInput,
+  CHARACTER_P3_FEATURES, 
+  MOOD_EXPRESSIONS
 } from '../../lib/featuresConfig';
-import { CHARACTER_P3_FEATURES, MOOD_EXPRESSIONS } from '../../lib/featuresConfig';
 
 // ─── Animated UI primitives ───
 import {
@@ -72,7 +74,10 @@ export function CharactersModule({ seriesId }: { seriesId: string | null }) {
   // ─── Stores ───
   const activeSeriesId = useActiveStore((s) => s.activeSeriesId);
   const addToast = useToastStore((s) => s.addToast);
-  const hasElevenLabsKey = useApiVaultStore((s) => s.hasKey('elevenLabs_api_key'));
+  
+  // FIX: SECURE BACKEND READ (No client side keys)
+  const backendStatus = useBackendStatusStore((s) => s.services);
+  const hasElevenLabsKey = backendStatus.elevenlabs;
 
   // Resolve the effective series id: explicit prop first, then the active store.
   const effectiveSeriesId = seriesId ?? activeSeriesId;
@@ -219,7 +224,7 @@ export function CharactersModule({ seriesId }: { seriesId: string | null }) {
 
   async function testVoice(voiceId: string) {
     if (!hasElevenLabsKey) {
-      addToast('ElevenLabs API key not configured. Add it in the Secure API Vault.', 'warning');
+      addToast('ElevenLabs API key not configured on server. Add it in the Secure Vault.', 'warning');
       return;
     }
     if (!voiceId.trim()) {
@@ -1029,4 +1034,4 @@ export function CharactersModule({ seriesId }: { seriesId: string | null }) {
       )}
     </div>
   );
-}
+ }
