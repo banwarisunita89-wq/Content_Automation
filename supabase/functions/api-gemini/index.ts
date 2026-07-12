@@ -4,11 +4,6 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-};
 
 const PayloadSchema = z.object({
   prompt: z.string().min(1).max(8000),
@@ -24,9 +19,6 @@ Deno.serve(async (req: Request) =>{
   // Handle CORS Preflight request
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
-  }
-  if (req.method === "OPTIONS") {
-    return new Response(OK, { headers: corsHeaders });
   }
 
   if (req.method !== "POST") {
