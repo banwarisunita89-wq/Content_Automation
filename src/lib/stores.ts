@@ -259,4 +259,14 @@ export const useToastStore = create<ToastState>()(
     removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   })
 );
-    
+    // ─── Backend Status Store ───
+type BackendStatusState = {
+  status: 'online' | 'offline' | 'loading';
+  setStatus: (status: 'online' | 'offline' | 'loading') => void;
+};
+
+export const useBackendStatusStore = create<BackendStatusState>()((set) => ({
+  status: 'online',
+  setStatus: (status) => set({ status }),
+}));
+  
