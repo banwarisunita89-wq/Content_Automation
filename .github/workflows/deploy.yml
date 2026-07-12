@@ -20,12 +20,11 @@ jobs:
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
+        with version: latest
+          
       - name: Deploy Function
         run: supabase functions deploy api-gemini --project-ref $PROJECT_ID
-        
-        - name: Build
-        run: CI=false npm run build
+       
+     - name: Build
+       run: CI=false npm run build
         
