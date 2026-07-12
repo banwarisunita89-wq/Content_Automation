@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { Layout } from './components/Layout';
 import { AuthScreen } from './components/AuthScreen';
@@ -24,27 +24,32 @@ function AppContent() {
   const activeSeriesId = useActiveStore((s) => s.activeSeriesId);
   const setActiveSeries = useActiveStore((s) => s.setActiveSeries);
 
+  // No API calls in useEffect — only syncs local store state from cached query data
+  const seriesSetRef = useRef(false);
   useEffect(() => {
-    if (series && series.length > 0 && !activeSeriesId) {
+    if (series && series.length > 0 && !seriesSetRef.current) {
       const active = series.find((s) => s.status === 'active') || series[0];
       setActiveSeries(active.id);
+      seriesSetRef.current = true;
     }
-  }, [series, activeSeriesId, setActiveSeries]);
+  }, [series, setActiveSeries]);
 
   const seriesId = activeSeriesId ?? series?.[0]?.id ?? null;
 
   return (
-    <Layout>
-      {activeModule === 'cockpit' && <CockpitModule seriesId={seriesId} />}
-      {activeModule === 'scriptlab' && <ScriptLabModule seriesId={seriesId} />}
-      {activeModule === 'studio' && <StudioModule seriesId={seriesId} />}
-      {activeModule === 'captions' && <CaptionsModule seriesId={seriesId} />}
-      {activeModule === 'schedule' && <ScheduleModule seriesId={seriesId} />}
-      {activeModule === 'worldbuilder' && <WorldBuilderModule seriesId={seriesId} />}
-      {activeModule === 'characters' && <CharactersModule seriesId={seriesId} />}
-      {activeModule === 'analytics' && <AnalyticsModule seriesId={seriesId} />}
-      {activeModule === 'settings' && <SettingsModule />}
-    </Layout>
+    <div className="min-h-screen w-full bg-black text-gray-100 overflow-x-hidden">
+      <Layout>
+        {activeModule === 'cockpit' && <CockpitModule seriesId={seriesId} />}
+        {activeModule === 'scriptlab' && <ScriptLabModule seriesId={seriesId} />}
+        {activeModule === 'studio' && <StudioModule seriesId={seriesId} />}
+        {activeModule === 'captions' && <CaptionsModule seriesId={seriesId} />}
+        {activeModule === 'schedule' && <ScheduleModule seriesId={seriesId} />}
+        {activeModule === 'worldbuilder' && <WorldBuilderModule seriesId={seriesId} />}
+        {activeModule === 'characters' && <CharactersModule seriesId={seriesId} />}
+        {activeModule === 'analytics' && <AnalyticsModule seriesId={seriesId} />}
+        {activeModule === 'settings' && <SettingsModule />}
+      </Layout>
+    </div>
   );
 }
 
@@ -54,6 +59,7 @@ export default function App() {
   const setSession = useAuthStore((s) => s.setSession);
   const setInitialized = useAuthStore((s) => s.setInitialized);
 
+  // Auth session check only — no external API calls
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -69,8 +75,8 @@ export default function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         {!initialized ? (
-          <div className="min-h-screen w-full bg-black text-gray-100 overflow-x-hidden">
-            <div className="text-ink-400 text-sm">Loading...</div>
+          <div className="min-h-screen w-full flex items-center justify-center bg-black text-gray-100">
+            <div className="text-zinc-400 text-sm">Loading...</div>
           </div>
         ) : !session ? (
           <AuthScreen />
