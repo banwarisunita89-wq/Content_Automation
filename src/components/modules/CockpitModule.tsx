@@ -29,8 +29,8 @@ export function CockpitModule({ seriesId }: { seriesId: string | null }) {
   const setActiveVariantIndex = useScriptStore((s) => s.setActiveVariant);
 
   // SECURE BACKEND STATUS READ
-  const backendStatus = useBackendStatusStore((s) => s.services);
-
+  const backendStatus = useBackendStatusStore((s) => s.status);
+  
   const panicActive = useSystemStore((s) => s.panicActive);
   const zenMode = useSystemStore((s) => s.zenMode);
   const timelineStage = useSystemStore((s) => s.timelineStage);
