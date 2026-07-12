@@ -20,7 +20,11 @@ const PayloadSchema = z.object({
   }).optional(),
 });
 
-Deno.serve(async (req: Request) => {
+Deno.serve(async (req: Request) =>{
+  // Handle CORS Preflight request
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
   if (req.method === "OPTIONS") {
     return new Response(OK, { headers: corsHeaders });
   }
