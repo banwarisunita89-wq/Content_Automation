@@ -23,7 +23,55 @@ export const generateAIContent = async ({ prompt, systemInstruction, maxOutputTo
   const cacheStore = useAiCacheStore.getState();
   const toastStore = useToastStore.getState();
 
-  // 1. CACHE CHECK: Prevent duplicate requests completely
+  // 1. CACHE CHECK: Prevent duplicate requests
+  if (cacheStore.hasCache(hash)) {
+    return cacheStore.cache[hash];
+  }
+
+  // 2. QUEUE CHECK: Prevent React double-firing
+  if (cacheStore.isRequesting(hash)) {
+    throw new Error("Generation already in progress");
+  }
+
+  cacheStore.addRequest(hash);
+
+  try {
+    // 3. SECURE BACKEND CALL: Invoking Supabase Edge Function
+    // Ab hum frontend mein key nahi dhoondh rahe hain!
+    const { data, error } = await supabase.functions.invoke('api-gemini', {
+      body: { 
+        prompt, 
+        systemInstruction, 
+        maxOutputTokens 
+      }
+    });
+
+    if (error) {
+      console.error("Supabase Edge Function Error:", error);
+      throw new Error("Backend AI Generation Failed");
+    }
+
+    // Edge function se aaya hua text extract karein
+    // (Aapke edge function ke response structure ke hisaab se ise adjust karein, 
+    // commonly ye data.text ya data.result hota hai)
+    const resultText = data?.text || data?.result || "";
+
+    if (!resultText) {
+      throw new Error("Empty response received from backend");
+    }
+
+    // 4. Save to cache and return
+    cacheStore.setCache(hash, resultText);
+    return resultText;
+
+  } catch (error: any) {
+    toastStore.addToast(error.message || "Failed to generate script", "error");
+    throw error;
+  } finally {
+    cacheStore.removeRequest(hash);
+  }
+};
+   // 1. CACHE CHECK: Prevent duplicate requests completely
   if (cacheStore.hasCache(hash)) {
     return cacheStore.cache[hash];
   }
