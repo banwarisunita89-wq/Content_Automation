@@ -1,13 +1,9 @@
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { z } from "npm:zod@3.23.8";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
@@ -23,7 +19,7 @@ const PayloadSchema = z.object({
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(OK, { headers: corsHeaders });
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   if (req.method !== "POST") {
@@ -98,17 +94,9 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
+    return new Response(JSON.stringify({ error: 'Provider Timeout' }), {
+      status: 504,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
-    return new Response(
-      JSON.stringify({ data: "Aapke Gemini ke ideas yahan hain" }), // (Aapka purana code)
-      { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }, // Yeh line add karni hai
-        status: 200 
-      }
-    );
-      

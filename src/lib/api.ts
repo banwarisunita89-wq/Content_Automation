@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosError } from 'axios';
 import { useToastStore } from './stores';
 
-const MAX_RETRIES = 0;
+const MAX_RETRIES = 2;
 const BASE_DELAY = 1000;
 
 type RetryConfig = {
@@ -66,50 +66,62 @@ apiClient.interceptors.response.use(
   }
 );
 
-export function setProvider(provider: string) {
-  return (config: AxiosRequestConfig) => ({ ...config, _provider: provider } as AxiosRequestConfig & RetryConfig);
-}
-
-// ─── Gemini API (via secure edge function) ───
 export async function callGemini(prompt: string, systemInstruction?: string): Promise<string> {
-  const response = await apiClient.post(
-    EDGE_URLS.gemini,
-    { prompt, systemInstruction },
-    { _provider: 'Gemini' } as unknown as AxiosRequestConfig
-  );
-  const text = response.data?.text;
-  if (!text) throw new Error('Gemini returned no content');
-  return text;
+  try {
+    const response = await apiClient.post(
+      EDGE_URLS.gemini,
+      { prompt, systemInstruction },
+      { _provider: 'Gemini' } as unknown as AxiosRequestConfig
+    );
+    const text = response.data?.text;
+    if (!text) throw new Error('Gemini returned no content');
+    return text;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Provider Timeout';
+    throw new Error(msg);
+  }
 }
 
-// ─── Fal Video API (via secure edge function) ───
 export async function callFal(modelId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await apiClient.post(
-    EDGE_URLS.video,
-    { modelId, input },
-    { _provider: 'Fal' } as unknown as AxiosRequestConfig
-  );
-  return response.data as Record<string, unknown>;
+  try {
+    const response = await apiClient.post(
+      EDGE_URLS.video,
+      { modelId, input },
+      { _provider: 'Fal' } as unknown as AxiosRequestConfig
+    );
+    return response.data as Record<string, unknown>;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Provider Timeout';
+    throw new Error(msg);
+  }
 }
 
-// ─── ElevenLabs TTS (via secure edge function) ───
 export async function callElevenLabs(text: string, voiceId: string): Promise<Record<string, unknown>> {
-  const response = await apiClient.post(
-    EDGE_URLS.audio,
-    { action: 'tts', text, voiceId },
-    { _provider: 'ElevenLabs' } as unknown as AxiosRequestConfig
-  );
-  return response.data as Record<string, unknown>;
+  try {
+    const response = await apiClient.post(
+      EDGE_URLS.audio,
+      { action: 'tts', text, voiceId },
+      { _provider: 'ElevenLabs' } as unknown as AxiosRequestConfig
+    );
+    return response.data as Record<string, unknown>;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Provider Timeout';
+    throw new Error(msg);
+  }
 }
 
-// ─── HuggingFace SFX (via secure edge function) ───
 export async function callHuggingFace(endpoint: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const response = await apiClient.post(
-    EDGE_URLS.audio,
-    { action: 'sfx', modelEndpoint: endpoint, input },
-    { _provider: 'HuggingFace' } as unknown as AxiosRequestConfig
-  );
-  return response.data as Record<string, unknown>;
+  try {
+    const response = await apiClient.post(
+      EDGE_URLS.audio,
+      { action: 'sfx', modelEndpoint: endpoint, input },
+      { _provider: 'HuggingFace' } as unknown as AxiosRequestConfig
+    );
+    return response.data as Record<string, unknown>;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Provider Timeout';
+    throw new Error(msg);
+  }
 }
 
 export { apiClient };

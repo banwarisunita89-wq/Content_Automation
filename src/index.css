@@ -5,12 +5,12 @@
 @tailwind utilities;
 
 :root {
-  --accent: #00d4ff;
-  --accent-glow: rgba(0, 212, 255, 0.35);
-  --accent-dim: rgba(0, 212, 255, 0.12);
-  --radius: 12px;
-  --bg-grad-1: rgba(0, 212, 255, 0.04);
-  --bg-grad-2: rgba(124, 58, 237, 0.03);
+  --accent: #18181b;
+  --accent-glow: rgba(24, 24, 27, 0.25);
+  --accent-dim: rgba(24, 24, 27, 0.08);
+  --radius: 8px;
+  --bg-grad-1: rgba(24, 24, 27, 0.02);
+  --bg-grad-2: rgba(82, 82, 91, 0.01);
 }
 
 * {
@@ -19,18 +19,19 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-x: hidden;
 }
 
 body {
-  background-color: #0B0C10;
-  color: #e8eaef;
+  background-color: #09090b;
+  color: #e4e4e7;
   font-family: 'Inter', system-ui, sans-serif;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
 }
 
-/* Ambient background gradient */
 body::before {
   content: '';
   position: fixed;
@@ -42,41 +43,37 @@ body::before {
   z-index: 0;
 }
 
-/* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(124, 132, 153, 0.25);
-  border-radius: 4px;
+  background: rgba(161, 161, 170, 0.2);
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(124, 132, 153, 0.45);
+  background: rgba(161, 161, 170, 0.35);
 }
 
 @layer components {
   .glass-panel {
-    @apply bg-ink-850/60 backdrop-blur-xl border border-white/[0.06] rounded-xl;
-    box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 8px 32px -8px rgba(0, 0, 0, 0.5);
+    @apply bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-xl border border-zinc-200 dark:border-zinc-900 rounded-xl;
   }
 
   .glass-panel-hover {
-    @apply transition-all duration-300 hover:border-white/[0.12] hover:bg-ink-800/70;
+    @apply transition-colors duration-200 hover:border-zinc-300 dark:hover:border-zinc-800;
   }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200;
-    background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #fff 0%));
-    color: #05060a;
-    box-shadow: 0 0 24px var(--accent-glow), 0 1px 0 0 rgba(255, 255, 255, 0.3) inset;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors duration-150;
+    background: var(--accent);
+    color: #fff;
   }
   .btn-primary:hover {
     filter: brightness(1.1);
-    box-shadow: 0 0 32px var(--accent-glow), 0 1px 0 0 rgba(255, 255, 255, 0.4) inset;
   }
   .btn-primary:active {
     transform: scale(0.97);
@@ -84,41 +81,38 @@ body::before {
   .btn-primary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-    box-shadow: none;
   }
 
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm text-ink-200 transition-all duration-200;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm text-zinc-600 dark:text-zinc-400 transition-colors duration-150;
+    background: rgba(24, 24, 27, 0.04);
+    border: 1px solid rgba(24, 24, 27, 0.08);
   }
   .btn-ghost:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.12);
-    color: #fff;
+    background: rgba(24, 24, 27, 0.08);
+    color: #18181b;
   }
   .btn-ghost:active {
     transform: scale(0.97);
   }
 
   .input-field {
-    @apply w-full px-3.5 py-2.5 rounded-xl text-sm text-ink-50 bg-ink-900/60 border border-white/[0.06] transition-all duration-200;
+    @apply w-full px-3 py-2 rounded-lg text-sm text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 transition-colors duration-150;
     outline: none;
   }
   .input-field::placeholder {
-    color: #565d75;
+    color: #a1a1aa;
   }
   .input-field:hover {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(24, 24, 27, 0.15);
   }
   .input-field:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-dim);
-    background: ink-900;
+    box-shadow: 0 0 0 2px var(--accent-dim);
   }
 
   .chip {
-    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 cursor-default;
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors duration-150 cursor-default;
   }
 
   .status-dot {
@@ -126,22 +120,21 @@ body::before {
   }
 
   .nav-item {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-ink-300 transition-all duration-200 cursor-pointer;
+    @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-zinc-600 dark:text-zinc-400 transition-colors duration-150 cursor-pointer;
   }
   .nav-item:hover {
-    background: rgba(255, 255, 255, 0.04);
-    color: #e8eaef;
+    background: rgba(24, 24, 27, 0.04);
+    color: #18181b;
   }
   .nav-item.active {
     background: var(--accent-dim);
     color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent-glow);
   }
 }
 
 @layer utilities {
   .text-gradient {
-    background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+    background: linear-gradient(135deg, #18181b 0%, #52525b 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -153,31 +146,5 @@ body::before {
   }
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
-  }
-
-  .grid-bg {
-    background-image:
-      linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-    background-size: 32px 32px;
-  }
-
-  .spotlight-pulse {
-    animation: spotlightPulse 1.5s ease-in-out infinite;
-    position: relative;
-    z-index: 61;
-  }
-
-  @keyframes spotlightPulse {
-    0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow), 0 0 20px var(--accent-glow); }
-    50% { box-shadow: 0 0 0 8px transparent, 0 0 40px var(--accent-glow); }
-  }
-
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(124, 132, 153, 0.3);
-    border-radius: 3px;
   }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users, Scan, Mic, Shirt, Plus, X, Save, User, Lock, Volume2,
@@ -103,18 +103,24 @@ export function CharactersModule({ seriesId }: { seriesId: string | null }) {
   );
 
   // Auto-select the first character once the roster loads.
+  const editingRef = useRef(false);
   useEffect(() => {
-    if (characters.length > 0 && !selectedId) {
-      setSelectedId(characters[0].id);
-      setEditing(characters[0]);
-    }
-    if (characters.length > 0 && selectedId) {
-      const current = characters.find((c) => c.id === selectedId);
-      if (current) setEditing(current);
-    }
     if (characters.length === 0) {
+      editingRef.current = false;
       setSelectedId(null);
       setEditing(blankCharacter());
+      return;
+    }
+    if (!selectedId) {
+      setSelectedId(characters[0].id);
+      setEditing(characters[0]);
+      editingRef.current = true;
+      return;
+    }
+    // Only sync from query data if user hasn't started editing
+    if (!editingRef.current) {
+      const current = characters.find((c) => c.id === selectedId);
+      if (current) setEditing(current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [characters]);

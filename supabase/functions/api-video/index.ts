@@ -3,7 +3,7 @@ import { z } from "npm:zod@3.23.8";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
@@ -73,9 +73,9 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify(data), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
+  } catch {
+    return new Response(JSON.stringify({ error: 'Provider Timeout' }), {
+      status: 504,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

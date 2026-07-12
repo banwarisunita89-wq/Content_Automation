@@ -2,7 +2,7 @@
 // Real Gemini API integration · Zustand stores · React Query · framer-motion
 // Sub-tabs: YT Studio | Insta Studio
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Youtube, Instagram, FileText, Image, Pin,
@@ -228,28 +228,30 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
   );
 
   // ─── Sync active episode from store / episodes list ───
+  const episodeLoadedRef = useRef(false);
   useEffect(() => {
     if (episodes.length === 0) {
+      episodeLoadedRef.current = false;
       setActiveEpisodeState(null);
       return;
     }
-    // If we have a store-level active episode, find it
     if (activeEpisodeId) {
       const found = episodes.find((e) => e.id === activeEpisodeId);
       if (found) {
         setActiveEpisodeState(found);
+        episodeLoadedRef.current = true;
         return;
       }
     }
-    // Otherwise pick the first rendered/published episode, or the first available
-    if (!activeEpisode) {
+    if (!episodeLoadedRef.current) {
       const preferred =
         episodes.find((e) => e.status === 'rendered' || e.status === 'published') ||
         episodes.find((e) => e.status === 'approved') ||
         episodes[0];
       setActiveEpisodeState(preferred);
+      episodeLoadedRef.current = true;
     }
-  }, [episodes, activeEpisodeId, activeEpisode]);
+  }, [episodes, activeEpisodeId]);
 
   // ─── Load existing metadata when active episode changes ───
   useEffect(() => {
