@@ -1,3 +1,7 @@
+// ─── Script Lab Module (Phase 2 Enterprise Overhaul) ───
+// Real Gemini API integration · Zustand stores · React Query · framer-motion
+// Sub-tabs: Generator | Drafts | Analysis
+
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -24,8 +28,8 @@ import {
   useAddLogMutation,
 } from '../../lib/queries';
 
-// ─── Phase 1 Smart Engine Integration ───
-import { generateAIContent } from '../../lib/geminiClient';
+// ─── Real Gemini API ───
+import { callGemini } from '../../lib/api';
 
 // ─── Feature config (data-driven UI) ───
 import {
@@ -93,12 +97,10 @@ function extractJson(text: string): string {
 }
 
 function buildGeminiPrompt(opts: {
-  projectMode: 'series' | 'individual';
   seriesTitle: string;
   seriesSynopsis: string;
   seriesTone: string;
   episodeNumber: number;
-  previousContext: string;
   language: LanguageCode;
   toneOverride: string;
   targetDuration: number;
@@ -110,20 +112,17 @@ function buildGeminiPrompt(opts: {
     ? `\nACTIVE ENHANCEMENT MODULES: ${opts.enabledFeatures.join(', ')}.`
     : '';
 
-  const modeDirectives = opts.projectMode === 'series' 
-    ? `SERIES: "${opts.seriesTitle}".\nSYNOPSIS: ${opts.seriesSynopsis || 'N/A'}.\nEPISODE NUMBER: ${opts.episodeNumber}.\nPREVIOUS EPISODE CONTEXT: ${opts.previousContext}\nCRITICAL: You MUST maintain story continuity with the previous episode context.`
-    : `PROJECT TYPE: Standalone Individual Video.\nCRITICAL: This is a single, self-contained video. Do not reference previous or future episodes.`;
-
   return [
     `You are an elite viral short-form video scriptwriter for an AI-animated series.`,
-    modeDirectives,
+    `SERIES: "${opts.seriesTitle}".`,
+    `SYNOPSIS: ${opts.seriesSynopsis || 'N/A'}.`,
     `TONE: ${opts.toneOverride || opts.seriesTone || 'engaging, cinematic'}.`,
+    `EPISODE NUMBER: ${opts.episodeNumber}.`,
     `TARGET DURATION: ${opts.targetDuration} seconds.`,
     `LANGUAGE: ${langName} (write all dialogue and on-screen text in ${langName}).`,
     featureDirectives,
     opts.customPrompt ? `\nADDITIONAL INSTRUCTIONS: ${opts.customPrompt}` : '',
     ``,
-    `CRITICAL INSTRUCTION: You MUST output the ENTIRE script. Do not stop after the hook. Do not truncate the JSON.`,
     `Respond with ONLY a single JSON object (no markdown, no commentary) with this exact schema:`,
     `{`,
     `  "hook": string,                          // 3-second attention-grabbing opening line`,
@@ -139,7 +138,7 @@ function buildGeminiPrompt(opts: {
     `  "cta": string,                            // high-conversion call-to-action`,
     `  "seo_keywords": string[]                  // 6-10 SEO keywords mined for this episode`,
     `}`,
-    `Generate exactly enough scenes to fill a ${opts.targetDuration}s vertical video.`,
+    `Generate 3-5 scenes optimized for a ${opts.targetDuration}s vertical video.`,
   ].filter(Boolean).join('\n');
 }
 
@@ -157,12 +156,13 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
 
   const setActiveSeries = useActiveStore((s) => s.setActiveSeries);
   const setActiveEpisode = useActiveStore((s) => s.setActiveEpisode);
-  const projectMode = useActiveStore((s) => s.projectMode); // Added Project Mode
 
   const setActiveModule = useNavStore((s) => s.setActiveModule);
   const setSpotlight = useNavStore((s) => s.setSpotlight);
+
   const addToast = useToastStore((s) => s.addToast);
-  
+  const hasGeminiKey = useApiVaultStore((s) => s.hasKey('gemini_api_key'));
+
   // React Query
   const { data: seriesList = [], isLoading: seriesLoading } = useSeriesQuery();
   const { data: episodes = [], isLoading: episodesLoading } = useEpisodesQuery(seriesId);
@@ -192,15 +192,13 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     if (seriesId && !selectedSeriesId) setSelectedSeriesId(seriesId);
   }, [seriesId, selectedSeriesId]);
 
-  // When series changes, default episode number to next available OR 1 for individual mode
+  // When series changes, default episode number to next available
   useEffect(() => {
-    if (projectMode === 'series' && episodes.length > 0) {
+    if (episodes.length > 0) {
       const maxNum = Math.max(...episodes.map((e) => e.episode_number));
       setEpisodeNumber((prev) => (prev < 1 ? maxNum + 1 : prev));
-    } else if (projectMode === 'individual') {
-      setEpisodeNumber(1);
     }
-  }, [episodes, projectMode]);
+  }, [episodes]);
 
   // Load script from active episode into store + edit buffer
   const loadEpisodeIntoEditor = useCallback((ep: Episode) => {
@@ -267,20 +265,15 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       addToast('Gemini API key not configured. Add it in the Secure API Vault.', 'error');
       return;
     }
-    if (projectMode === 'series' && !selectedSeriesId) {
+    if (!selectedSeriesId) {
       addToast('Select a series before generating.', 'warning');
       return;
     }
 
-    const series = projectMode === 'series' ? seriesList.find((s) => s.id === selectedSeriesId) || null : null;
-
-    // Build context for continuity
-    let previousContext = 'No previous context available.';
-    if (projectMode === 'series' && episodeNumber > 1) {
-       const prevEp = episodes.find(e => e.episode_number === episodeNumber - 1);
-       if (prevEp?.script) {
-         previousContext = `In Episode ${episodeNumber - 1}, the story ended with: "${prevEp.script.cta}". Dialogue summary: "${prevEp.script.dialogue?.substring(0, 300)}"`;
-       }
+    const series = seriesList.find((s) => s.id === selectedSeriesId) || null;
+    if (!series) {
+      addToast('Selected series not found.', 'error');
+      return;
     }
 
     // Clear state for a fresh generation
@@ -291,14 +284,13 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
     setTypedText('');
     setEditBuffer('');
     setGenerating(true);
-    if (selectedSeriesId) setActiveSeries(selectedSeriesId);
-    
-    addToast('Dispatching script generation to Smart AI Engine...', 'info');
+    setActiveSeries(selectedSeriesId);
+    addToast('Dispatching script generation to Gemini...', 'info');
 
     await addLogMut.mutateAsync({
       level: 'info',
       source: 'script-lab',
-      message: `Script generation requested — Mode: ${projectMode} (${language})`,
+      message: `Script generation requested — Series "${series.title}" Ep ${episodeNumber} (${language})`,
       details: { seriesId: selectedSeriesId, episodeNumber, language },
       retryable: true,
       resolved: false,
@@ -306,12 +298,10 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
 
     const enabledFeatures = Object.keys(featureState).filter((id) => featureState[id]);
     const prompt = buildGeminiPrompt({
-      projectMode,
-      seriesTitle: series?.title || 'Individual Video Project',
-      seriesSynopsis: series?.synopsis || '',
-      seriesTone: series?.tone || '',
+      seriesTitle: series.title,
+      seriesSynopsis: series.synopsis || '',
+      seriesTone: series.tone || '',
       episodeNumber,
-      previousContext,
       language,
       toneOverride: tonePrefix + toneOverride,
       targetDuration,
@@ -319,16 +309,11 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       enabledFeatures,
     });
 
-    const systemInstruction = 'You are a JSON-only response engine. Output valid JSON and nothing else.';
+    const systemInstruction =
+      'You are a JSON-only response engine. Output valid JSON and nothing else.';
 
     try {
-      // ─── Phase 1 Engine Call ───
-      const raw = await generateAIContent({
-        prompt,
-        systemInstruction,
-        maxOutputTokens: 8192 // Strict full script requirement
-      });
-      
+      const raw = await callGemini(prompt, systemInstruction);
       const jsonStr = extractJson(raw);
       let parsed: Record<string, unknown>;
       try {
@@ -377,9 +362,9 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
 
       // Persist as a new episode draft
       const created = await createEpisodeMut.mutateAsync({
-        series_id: projectMode === 'series' ? selectedSeriesId : null,
+        series_id: selectedSeriesId,
         episode_number: episodeNumber,
-        title: projectMode === 'series' ? `${series?.title} — Ep ${episodeNumber}` : `Standalone Video - ${new Date().toLocaleDateString()}`,
+        title: `${series.title} — Ep ${episodeNumber}`,
         script: newScript,
         script_variants: [newScript],
         active_variant_index: 0,
@@ -419,10 +404,10 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       setGenerating(false);
     }
   }, [
-    hasGeminiKey, projectMode, selectedSeriesId, seriesList, episodeNumber, language, toneOverride, tonePrefix,
+    hasGeminiKey, selectedSeriesId, seriesList, episodeNumber, language, toneOverride, tonePrefix,
     targetDuration, customPrompt, featureState, clearScript, setActiveEpisode,
     setViralityScore, setGenerating, setActiveSeries, addToast, addLogMut,
-    setScript, addVariant, runTypingEffect, createEpisodeMut, episodes
+    setScript, addVariant, runTypingEffect, createEpisodeMut, setActiveEpisode,
   ]);
 
   // ─── Save Variant (Drafts tab) ───
@@ -586,7 +571,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
         <div>
           <h2 className="text-xl font-bold text-gradient mb-1">Script Lab & Viral Generator</h2>
           <p className="text-sm text-ink-300">
-            {projectMode === 'individual' ? 'Craft standalone viral hooks.' : 'Engineer multi-layer hooks, ensure storyline continuity.'}
+            Engineer multi-layer hooks, ensure storyline continuity, and dispatch to production.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -622,7 +607,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
         </MotionPanel>
       )}
 
-    {/* Sub-tabs */}
+      {/* Sub-tabs */}
       <SubTabs tabs={SCRIPT_LAB_TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
       {/* ─── Generator Tab ─── */}
@@ -639,7 +624,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
             <MotionPanel className="p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Film size={15} className="text-accent" />
-                <h3 className="text-sm font-semibold text-ink-100">Project Context</h3>
+                <h3 className="text-sm font-semibold text-ink-100">Series · Episode · Language</h3>
                 <button
                   onClick={handlePurgeDrafts}
                   className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
@@ -650,44 +635,32 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
                 </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* Series Only UI Elements */}
-                {projectMode === 'series' && (
-                  <>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-ink-200">Select Series</label>
-                      <select
-                        value={selectedSeriesId ?? ''}
-                        onChange={(e) => setSelectedSeriesId(e.target.value || null)}
-                        className="input-field"
-                        disabled={seriesLoading}
-                      >
-                        <option value="">{seriesLoading ? 'Loading…' : 'Choose series…'}</option>
-                        {seriesList.map((s) => (
-                          <option key={s.id} value={s.id}>{s.title}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-medium text-ink-200">Select Episode No.</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={episodeNumber}
-                        onChange={(e) => setEpisodeNumber(Math.max(1, Number(e.target.value) || 1))}
-                        className="input-field"
-                      />
-                    </div>
-                  </>
-                )}
-
-                {/* Individual UI Elements */}
-                {projectMode === 'individual' && (
-                  <div className="space-y-1.5 sm:col-span-2">
-                    <label className="text-xs font-medium text-ink-200">Standalone Project Target</label>
-                    <div className="input-field flex items-center text-ink-300">Single Video Workflow (Continuity Disabled)</div>
-                  </div>
-                )}
-
+                {/* Select Series */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-ink-200">Select Series</label>
+                  <select
+                    value={selectedSeriesId ?? ''}
+                    onChange={(e) => setSelectedSeriesId(e.target.value || null)}
+                    className="input-field"
+                    disabled={seriesLoading}
+                  >
+                    <option value="">{seriesLoading ? 'Loading…' : 'Choose series…'}</option>
+                    {seriesList.map((s) => (
+                      <option key={s.id} value={s.id}>{s.title}</option>
+                    ))}
+                  </select>
+                </div>
+                {/* Select Episode No. */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-ink-200">Select Episode No.</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={episodeNumber}
+                    onChange={(e) => setEpisodeNumber(Math.max(1, Number(e.target.value) || 1))}
+                    className="input-field"
+                  />
+                </div>
                 {/* Language */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-ink-200">Language</label>
@@ -711,37 +684,106 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-ink-200">Tone Override</label>
-                    <input
-                      type="text"
-                      value={toneOverride}
-                      placeholder="e.g. suspenseful, energetic..."
-                      onChange={(e) => setToneOverride(e.target.value)}
-                      className="input-field"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-ink-200">Target Duration (s)</label>
-                    <input
-                      type="number"
-                      min={15}
-                      max={180}
-                      value={targetDuration}
-                      onChange={(e) => setTargetDuration(Math.max(15, Number(e.target.value) || 60))}
-                      className="input-field"
-                    />
-                  </div>
-                  <div className="space-y-1.5 sm:col-span-2">
-                    <label className="text-xs font-medium text-ink-200">Custom Prompt</label>
-                    <textarea
-                      rows={3}
-                      value={customPrompt}
-                      placeholder="Special instructions for the AI..."
-                      onChange={(e) => setCustomPrompt(e.target.value)}
-                      className="input-field resize-none"
-                    />
-                  </div>
+                {SCRIPT_LAB_INPUTS.map((input) => {
+                  // Series dropdown — driven by useSeriesQuery
+                  if (input.id === 'series_select') {
+                    return (
+                      <div key={input.id} className="space-y-1.5">
+                        <label className="text-xs font-medium text-ink-200">{input.label}</label>
+                        <select
+                          value={selectedSeriesId ?? ''}
+                          onChange={(e) => setSelectedSeriesId(e.target.value || null)}
+                          className="input-field"
+                          disabled={seriesLoading}
+                        >
+                          <option value="">{input.placeholder || 'Choose series...'}</option>
+                          {seriesList.map((s) => (
+                            <option key={s.id} value={s.id}>{s.title}</option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  }
+                  // Episode number
+                  if (input.id === 'episode_number') {
+                    return (
+                      <div key={input.id} className="space-y-1.5">
+                        <label className="text-xs font-medium text-ink-200">{input.label}</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={episodeNumber}
+                          onChange={(e) => setEpisodeNumber(Math.max(1, Number(e.target.value) || 1))}
+                          className="input-field"
+                        />
+                      </div>
+                    );
+                  }
+                  // Language — stored in useScriptStore
+                  if (input.id === 'language') {
+                    return (
+                      <div key={input.id} className="space-y-1.5">
+                        <label className="text-xs font-medium text-ink-200">{input.label}</label>
+                        <select
+                          value={LANGUAGE_OPTIONS.find((l) => l.code === language)?.label || 'English'}
+                          onChange={(e) => setLanguage(LANG_LABEL_TO_CODE[e.target.value] || 'en')}
+                          className="input-field"
+                        >
+                          {(input.options || []).map((opt) => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  }
+                  // Tone override
+                  if (input.id === 'tone_override') {
+                    return (
+                      <div key={input.id} className="space-y-1.5">
+                        <label className="text-xs font-medium text-ink-200">{input.label}</label>
+                        <input
+                          type="text"
+                          value={toneOverride}
+                          placeholder={input.placeholder}
+                          onChange={(e) => setToneOverride(e.target.value)}
+                          className="input-field"
+                        />
+                      </div>
+                    );
+                  }
+                  // Target duration
+                  if (input.id === 'target_duration') {
+                    return (
+                      <div key={input.id} className="space-y-1.5">
+                        <label className="text-xs font-medium text-ink-200">{input.label}</label>
+                        <input
+                          type="number"
+                          min={15}
+                          max={180}
+                          value={targetDuration}
+                          onChange={(e) => setTargetDuration(Math.max(15, Number(e.target.value) || 60))}
+                          className="input-field"
+                        />
+                      </div>
+                    );
+                  }
+                  // Custom prompt
+                  if (input.id === 'custom_prompt') {
+                    return (
+                      <div key={input.id} className="space-y-1.5 sm:col-span-2">
+                        <label className="text-xs font-medium text-ink-200">{input.label}</label>
+                        <textarea
+                          rows={3}
+                          value={customPrompt}
+                          placeholder={input.placeholder}
+                          onChange={(e) => setCustomPrompt(e.target.value)}
+                          className="input-field resize-none"
+                        />
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
               </div>
 
               {/* ─── Phase 3: Audience Tone Switcher ─── */}
@@ -781,7 +823,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
               </div>
 
               {/* Selected series context */}
-              {projectMode === 'series' && selectedSeries && (
+              {selectedSeries && (
                 <div className="mt-3 p-3 rounded-xl bg-accent-dim border border-accent/20">
                   <p className="text-[10px] text-accent font-semibold uppercase tracking-wide mb-1">
                     Series Context Injected
@@ -800,12 +842,12 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
                 <h3 className="text-sm font-semibold text-ink-100">Live Generation</h3>
                 {isGenerating && (
                   <span className="ml-auto flex items-center gap-1.5 text-[10px] text-accent">
-                    <Loader2 size={11} className="animate-spin" /> streaming from AI Engine
+                    <Loader2 size={11} className="animate-spin" /> streaming from Gemini
                   </span>
                 )}
               </div>
               <pre className="text-xs font-mono text-ink-200 whitespace-pre-wrap min-h-[120px] p-3 rounded-xl bg-black/30 border border-white/[0.04]">
-                {typedText || (isGenerating ? 'Awaiting AI response...' : 'Press "Regenerate Fresh Scripts" to begin.')}
+                {typedText || (isGenerating ? 'Awaiting Gemini response...' : 'Press "Regenerate Fresh Scripts" to begin.')}
                 {isGenerating && <span className="animate-pulse">▋</span>}
               </pre>
             </MotionPanel>
@@ -957,7 +999,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
         </motion.div>
       )}
 
-       {/* ─── Drafts Tab ─── */}
+      {/* ─── Drafts Tab ─── */}
       {activeTab === 'drafts' && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
@@ -1167,7 +1209,7 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
         </motion.div>
       )}
 
-                {/* ─── Lock & Dispatch (always available) ─── */}
+      {/* ─── Lock & Dispatch (always available) ─── */}
       <MotionPanel className="p-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -1191,4 +1233,4 @@ export function ScriptLabModule({ seriesId }: { seriesId: string | null }) {
       </MotionPanel>
     </div>
   );
- }
+}

@@ -1,19 +1,21 @@
-// --- src/modules/CaptionsModule.tsx ---
+// ─── Caption Production Module (Phase 2 Enterprise Overhaul) ───
+// Real Gemini API integration · Zustand stores · React Query · framer-motion
+// Sub-tabs: YT Studio | Insta Studio
+
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Youtube, Instagram, FileText, Image, Pin,
   Sparkles, GripVertical, X, Wand2,
   AlertTriangle, Loader2, Hash, Smile, Save, RefreshCw,
-  ImagePlus, TrendingUp, MessageCircle, Stamp, Video
+  ImagePlus, TrendingUp, MessageCircle, Stamp,
 } from 'lucide-react';
 
 // ─── Stores (Zustand) ───
-// FIX: Swapped useApiVaultStore with useBackendStatusStore for zero-trust security
 import {
   useActiveStore,
   useToastStore,
-  useBackendStatusStore,
+  useApiVaultStore,
   useScriptStore,
 } from '../../lib/stores';
 
@@ -24,8 +26,8 @@ import {
   useAddLogMutation,
 } from '../../lib/queries';
 
-// ─── Phase 1 Smart Engine Integration ───
-import { generateAIContent } from '../../lib/geminiClient';
+// ─── Real Gemini API ───
+import { callGemini } from '../../lib/api';
 
 // ─── Feature config (data-driven UI) ───
 import {
@@ -85,20 +87,16 @@ function buildYtPrompt(opts: {
   scriptText: string;
   episodeNumber: number;
   seriesTitle: string;
-  projectMode: 'series' | 'individual';
   enabledFeatures: string[];
 }): string {
   const featureDirectives = opts.enabledFeatures.length
     ? `\nACTIVE ENHANCEMENT MODULES: ${opts.enabledFeatures.join(', ')}.`
     : '';
 
-  const modeContext = opts.projectMode === 'series'
-    ? `SERIES: "${opts.seriesTitle}".\nEPISODE NUMBER: ${opts.episodeNumber}.`
-    : `PROJECT TYPE: Standalone Individual Video.`;
-
   return [
-    `You are an elite YouTube Shorts metadata strategist for an AI-animated production.`,
-    modeContext,
+    `You are an elite YouTube Shorts metadata strategist for an AI-animated series.`,
+    `SERIES: "${opts.seriesTitle}".`,
+    `EPISODE NUMBER: ${opts.episodeNumber}.`,
     `SCRIPT CONTEXT:\n${opts.scriptText}`,
     featureDirectives,
     ``,
@@ -117,20 +115,16 @@ function buildIgPrompt(opts: {
   scriptText: string;
   episodeNumber: number;
   seriesTitle: string;
-  projectMode: 'series' | 'individual';
   enabledFeatures: string[];
 }): string {
   const featureDirectives = opts.enabledFeatures.length
     ? `\nACTIVE ENHANCEMENT MODULES: ${opts.enabledFeatures.join(', ')}.`
     : '';
 
-  const modeContext = opts.projectMode === 'series'
-    ? `SERIES: "${opts.seriesTitle}".\nEPISODE NUMBER: ${opts.episodeNumber}.`
-    : `PROJECT TYPE: Standalone Individual Video.`;
-
   return [
-    `You are an elite Instagram Reels caption strategist for an AI-animated production.`,
-    modeContext,
+    `You are an elite Instagram Reels caption strategist for an AI-animated series.`,
+    `SERIES: "${opts.seriesTitle}".`,
+    `EPISODE NUMBER: ${opts.episodeNumber}.`,
     `SCRIPT CONTEXT:\n${opts.scriptText}`,
     featureDirectives,
     ``,
@@ -148,13 +142,13 @@ function buildIgPrompt(opts: {
 // Assemble a flat text representation of the current script for Gemini context.
 function scriptToText(ep: Episode | null, fallbackScript: string | null): string {
   const script = ep?.script || null;
-  if (!script && !fallbackScript) return 'No script available — generate metadata based on context.';
+  if (!script && !fallbackScript) return 'No script available — generate metadata based on series context.';
   const s = script || null;
   const parts: string[] = [];
   if (s?.hook) parts.push(`HOOK: ${s.hook}`);
   if (s?.dialogue) parts.push(`DIALOGUE: ${s.dialogue}`);
   if (s?.scenes?.length) {
-    parts.push(`SCENES:\n${s.scenes.map((sc: any, i: number) => `  ${i + 1}. [${sc.shot}] ${sc.dialogue}`).join('\n')}`);
+    parts.push(`SCENES:\n${s.scenes.map((sc, i) => `  ${i + 1}. [${sc.shot}] ${sc.dialogue}`).join('\n')}`);
   }
   if (s?.cta) parts.push(`CTA: ${s.cta}`);
   if (s?.seo_keywords?.length) parts.push(`SEO KEYWORDS: ${s.seo_keywords.join(', ')}`);
@@ -166,13 +160,8 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
   // Stores
   const activeEpisodeId = useActiveStore((s) => s.activeEpisodeId);
   const setActiveEpisode = useActiveStore((s) => s.setActiveEpisode);
-  const projectMode = useActiveStore((s) => s.projectMode);
   const addToast = useToastStore((s) => s.addToast);
-  
-  // FIX: Secure backend read
-  const backendStatus = useBackendStatusStore((s) => s.services);
-  const hasGeminiKey = backendStatus.gemini;
-  
+  const hasGeminiKey = useApiVaultStore((s) => s.hasKey('gemini_api_key'));
   const currentScript = useScriptStore((s) => s.currentScript);
 
   // React Query
@@ -241,10 +230,6 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
   // ─── Sync active episode from store / episodes list ───
   const episodeLoadedRef = useRef(false);
   useEffect(() => {
-    if (projectMode === 'individual') {
-      setActiveEpisodeState(episodes[0] || null);
-      return;
-    }
     if (episodes.length === 0) {
       episodeLoadedRef.current = false;
       setActiveEpisodeState(null);
@@ -266,7 +251,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
       setActiveEpisodeState(preferred);
       episodeLoadedRef.current = true;
     }
-  }, [episodes, activeEpisodeId, projectMode]);
+  }, [episodes, activeEpisodeId]);
 
   // ─── Load existing metadata when active episode changes ───
   useEffect(() => {
@@ -330,7 +315,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
   // ─── Generate YT metadata via Gemini ───
   const handleGenerateYt = useCallback(async () => {
     if (!hasGeminiKey) {
-      addToast('Gemini API key not configured on backend. Add it in the Secure API Vault.', 'error');
+      addToast('Gemini API key not configured. Add it in the Secure API Vault.', 'error');
       return;
     }
     if (!activeEpisode && !currentScript) {
@@ -339,7 +324,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     }
 
     setYtGenerating(true);
-    addToast('Generating YouTube metadata from AI Engine...', 'info');
+    addToast('Generating YouTube metadata from Gemini...', 'info');
 
     await addLogMut.mutateAsync({
       level: 'info',
@@ -357,24 +342,17 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
       scriptText,
       episodeNumber: activeEpisode?.episode_number ?? 1,
       seriesTitle,
-      projectMode,
       enabledFeatures,
     });
 
     try {
-      // FIX: Replace raw fetch with Smart Caching Engine
-      const raw = await generateAIContent({
-        prompt,
-        systemInstruction: 'You are a JSON-only response engine. Output valid JSON and nothing else.',
-        maxOutputTokens: 2048
-      });
-      
+      const raw = await callGemini(prompt, 'You are a JSON-only response engine. Output valid JSON and nothing else.');
       const jsonStr = extractJson(raw);
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(jsonStr);
       } catch {
-        throw new Error('AI response was not valid JSON.');
+        throw new Error('Gemini response was not valid JSON.');
       }
 
       if (typeof parsed.title === 'string') setYtTitle(parsed.title);
@@ -391,6 +369,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
         setPinnedComment(parsed.pinned_comment);
       }
 
+      // Thumbnail frame placeholder (Gemini-driven heuristic)
       if (featureState.thumbnail_extractor) {
         setThumbnailFrame({ time: '0:14', score: 94, sharpness: 98 });
       }
@@ -418,12 +397,12 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     } finally {
       setYtGenerating(false);
     }
-  }, [hasGeminiKey, activeEpisode, currentScript, featureState, projectMode, addToast, addLogMut]);
+  }, [hasGeminiKey, activeEpisode, currentScript, featureState, addToast, addLogMut]);
 
   // ─── Save YT metadata via useUpdateEpisodeMutation ───
   const handleSaveYt = useCallback(async () => {
     if (!activeEpisode) {
-      addToast('No active project to save metadata for.', 'warning');
+      addToast('No active episode to save metadata for.', 'warning');
       return;
     }
     setYtSaving(true);
@@ -452,7 +431,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
         retryable: false,
         resolved: false,
       });
-      addToast(`YouTube metadata saved successfully.`, 'success');
+      addToast(`YouTube metadata saved for Ep ${activeEpisode.episode_number}.`, 'success');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       addToast(`Save failed: ${message}`, 'error');
@@ -464,7 +443,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
   // ─── Generate IG caption via Gemini ───
   const handleGenerateIg = useCallback(async () => {
     if (!hasGeminiKey) {
-      addToast('Gemini API key not configured on backend. Add it in the Secure API Vault.', 'error');
+      addToast('Gemini API key not configured. Add it in the Secure API Vault.', 'error');
       return;
     }
     if (!activeEpisode && !currentScript) {
@@ -473,7 +452,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     }
 
     setIgGenerating(true);
-    addToast('Generating Instagram caption from AI Engine...', 'info');
+    addToast('Generating Instagram caption from Gemini...', 'info');
 
     await addLogMut.mutateAsync({
       level: 'info',
@@ -492,24 +471,17 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
       scriptText,
       episodeNumber: activeEpisode?.episode_number ?? 1,
       seriesTitle,
-      projectMode,
       enabledFeatures,
     });
 
     try {
-      // FIX: Replace raw fetch with Smart Caching Engine
-      const raw = await generateAIContent({
-        prompt,
-        systemInstruction: 'You are a JSON-only response engine. Output valid JSON and nothing else.',
-        maxOutputTokens: 2048
-      });
-      
+      const raw = await callGemini(prompt, 'You are a JSON-only response engine. Output valid JSON and nothing else.');
       const jsonStr = extractJson(raw);
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(jsonStr);
       } catch {
-        throw new Error('AI response was not valid JSON.');
+        throw new Error('Gemini response was not valid JSON.');
       }
 
       if (typeof parsed.caption === 'string') setIgCaption(parsed.caption);
@@ -527,6 +499,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
       if (typeof parsed.optimized_preview === 'string') {
         setIgOptimizedPreview(parsed.optimized_preview);
       } else if (typeof parsed.caption === 'string') {
+        // Fallback: reflow caption with line-break optimizer
         setIgOptimizedPreview(parsed.caption.replace(/\. /g, '.\n\n'));
       }
 
@@ -553,12 +526,12 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     } finally {
       setIgGenerating(false);
     }
-  }, [hasGeminiKey, activeEpisode, currentScript, featureState, emojiInjector, projectMode, addToast, addLogMut]);
+  }, [hasGeminiKey, activeEpisode, currentScript, featureState, emojiInjector, addToast, addLogMut]);
 
   // ─── Save IG metadata via useUpdateEpisodeMutation ───
   const handleSaveIg = useCallback(async () => {
     if (!activeEpisode) {
-      addToast('No active project to save metadata for.', 'warning');
+      addToast('No active episode to save metadata for.', 'warning');
       return;
     }
     setIgSaving(true);
@@ -584,7 +557,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
         retryable: false,
         resolved: false,
       });
-      addToast(`Instagram caption saved successfully.`, 'success');
+      addToast(`Instagram caption saved for Ep ${activeEpisode.episode_number}.`, 'success');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       addToast(`Save failed: ${message}`, 'error');
@@ -595,11 +568,13 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
 
   // ─── Phase 3 helpers ───
 
+  // A/B Test Thumbnail Generator — deterministic CTR scores based on episode number
   const handleGenerateAbThumbnails = useCallback(() => {
     if (!activeEpisode) return;
     setAbGenerating(true);
+    // Deterministic pseudo-scores derived from episode number so they're stable per episode
     const epNum = activeEpisode.episode_number ?? 1;
-    const scoreA = Math.round((4 + ((epNum * 7) % 6) + (epNum % 3)) * 10) / 10;
+    const scoreA = Math.round((4 + ((epNum * 7) % 6) + (epNum % 3)) * 10) / 10; // ~4.0–9.9
     const scoreB = Math.round((4 + ((epNum * 11) % 6) + ((epNum + 1) % 4)) * 10) / 10;
     setTimeout(() => {
       setAbThumbnails({ a: { score: scoreA }, b: { score: scoreB } });
@@ -607,18 +582,19 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     }, 600);
   }, [activeEpisode]);
 
+  // Click-Bait Score Matrix — simple 1-10 virality scoring algorithm
   const computeClickbaitScore = useCallback((text: string): number => {
     if (!text || !text.trim()) return 0;
     const lower = text.toLowerCase();
-    let score = 1;
+    let score = 1; // baseline
     const powerWords = ['ultimate', 'insane', 'shocking', 'secret', 'exposed', 'crazy', 'unbelievable', 'never', 'always', 'nobody', 'everyone', 'destroy', 'crushed', 'insane'];
     const emotionalTriggers = ['you won\'t believe', 'mind-blowing', 'game-changer', 'this is why', 'the truth', 'what happens', 'changed my life'];
-    if (/\d/.test(text)) score += 1.5;
-    if (lower.includes('?') || /\bhow\b|\bwhy\b|\bwhat\b|\bwho\b|\bwhen\b/.test(lower)) score += 1.5;
+    if (/\d/.test(text)) score += 1.5; // contains a number
+    if (lower.includes('?') || /\bhow\b|\bwhy\b|\bwhat\b|\bwho\b|\bwhen\b/.test(lower)) score += 1.5; // question
     if (powerWords.some((w) => lower.includes(w))) score += 2;
     if (emotionalTriggers.some((p) => lower.includes(p))) score += 2;
-    if (/[A-Z]{3,}/.test(text)) score += 1;
-    if (text.length > 0 && text.length < 120) score += 1;
+    if (/[A-Z]{3,}/.test(text)) score += 1; // all-caps emphasis
+    if (text.length > 0 && text.length < 120) score += 1; // punchy length
     return Math.max(1, Math.min(10, Math.round(score * 10) / 10));
   }, []);
 
@@ -629,6 +605,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     });
   }, [computeClickbaitScore, ytTitle, ytDesc]);
 
+  // Emoji Auto-Pattern Injector — contextual emoji insertion
   const emojiEnhancedCaption = useMemo(() => {
     if (!emojiPatternEnabled || !igCaption) return igCaption;
     const patterns: Array<[RegExp, string]> = [
@@ -650,6 +627,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     return result;
   }, [emojiPatternEnabled, igCaption]);
 
+  // Comment Prompt Formulator — generates a debate-sparking pinned comment
   const handleGenerateCommentPrompt = useCallback(() => {
     if (!activeEpisode) return;
     setCommentPromptGenerating(true);
@@ -668,6 +646,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     }, 500);
   }, [activeEpisode]);
 
+  // Brand Overlay Module — quadrant selection
   const quadrantClasses: Record<typeof brandQuadrant, string> = {
     'top-left': 'top-2 left-2',
     'top-right': 'top-2 right-2',
@@ -679,6 +658,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
     setP3FeatureState((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
+  // ─── Derived ───
   const isLoading = episodesLoading;
   const saving = ytSaving || igSaving || updateEpisodeMut.isPending;
 
@@ -689,40 +669,38 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
         <div>
           <h2 className="text-xl font-bold text-gradient mb-1">Caption Production & Visual Asset Enhancer</h2>
           <p className="text-sm text-ink-300">
-            Platform-specific metadata for YouTube and Instagram — powered by AI Engine.
+            Platform-specific metadata for YouTube and Instagram — powered by Gemini.
           </p>
         </div>
         <div className="flex items-center gap-2">
           {!hasGeminiKey && (
             <span className="flex items-center gap-1.5 text-xs text-warning">
-              <AlertTriangle size={13} /> Backend AI Key missing
+              <AlertTriangle size={13} /> Gemini key missing
             </span>
           )}
-          <Badge variant={projectMode === 'series' ? 'accent' : 'success'}>
-            {projectMode === 'series' ? <Film size={12} className="mr-1"/> : <Video size={12} className="mr-1"/>}
-            {projectMode === 'series' ? 'Series Mode' : 'Individual Mode'}
-          </Badge>
-          {projectMode === 'series' && activeEpisode && (
+          {activeEpisode && (
             <Badge variant="accent">Ep {activeEpisode.episode_number}</Badge>
           )}
         </div>
       </MotionPanel>
 
+      {/* API key error state */}
       {!hasGeminiKey && (
         <MotionPanel className="p-4 border border-warning/30 bg-warning/5">
           <div className="flex items-start gap-3">
             <AlertTriangle size={18} className="text-warning shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-ink-100">AI Engine offline</p>
+              <p className="text-sm font-medium text-ink-100">Gemini API key not configured</p>
               <p className="text-xs text-ink-300 mt-1">
-                Configure your API key in <span className="text-accent">Settings → API Vault</span> to enable
-                metadata generation.
+                Add your Gemini API key in <span className="text-accent">Settings → API Vault</span> to enable
+                real metadata generation. All fields remain fully editable.
               </p>
             </div>
           </div>
         </MotionPanel>
       )}
 
+      {/* Episode selector */}
       {isLoading ? (
         <MotionPanel className="p-12 flex justify-center">
           <Spinner size={24} />
@@ -731,34 +709,34 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
         <Panel>
           <EmptyState
             icon={<FileText size={28} />}
-            title="No projects available"
-            subtitle="Create scripts in the Script Lab to generate captions."
+            title="No episodes available"
+            subtitle="Create episodes in the Script Lab to generate captions."
           />
         </Panel>
       ) : (
         <>
-          {projectMode === 'series' && (
-            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1">
-              {episodes.slice(0, 12).map((ep) => (
-                <MotionButton
-                  key={ep.id}
-                  onClick={() => {
-                    setActiveEpisodeState(ep);
-                    setActiveEpisode(ep.id);
-                  }}
-                  className={`shrink-0 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
-                    activeEpisode?.id === ep.id
-                      ? 'bg-accent-dim text-accent border border-accent/30'
-                      : 'bg-white/[0.04] text-ink-300 border border-white/[0.06] hover:text-ink-100'
-                  }`}
-                >
-                  Ep {ep.episode_number}
-                  <span className="ml-1.5 text-[9px] opacity-60">{ep.status}</span>
-                </MotionButton>
-              ))}
-            </div>
-          )}
+          {/* Episode strip */}
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1">
+            {episodes.slice(0, 12).map((ep) => (
+              <MotionButton
+                key={ep.id}
+                onClick={() => {
+                  setActiveEpisodeState(ep);
+                  setActiveEpisode(ep.id);
+                }}
+                className={`shrink-0 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+                  activeEpisode?.id === ep.id
+                    ? 'bg-accent-dim text-accent border border-accent/30'
+                    : 'bg-white/[0.04] text-ink-300 border border-white/[0.06] hover:text-ink-100'
+                }`}
+              >
+                Ep {ep.episode_number}
+                <span className="ml-1.5 text-[9px] opacity-60">{ep.status}</span>
+              </MotionButton>
+            ))}
+          </div>
 
+          {/* Sub-tabs */}
           <SubTabs tabs={CAPTION_TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
           {/* ─── YT Studio Tab ─── */}
@@ -772,13 +750,14 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                 transition={{ duration: 0.3 }}
                 className="space-y-4"
               >
+                {/* Generate button row */}
                 <MotionPanel className="p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                   <div className="flex items-start gap-3">
                     <Wand2 size={18} className="text-accent shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-sm font-medium text-ink-100">Generate from Active Script</p>
+                      <p className="text-sm font-medium text-ink-100">Generate from Gemini</p>
                       <p className="text-xs text-ink-300 mt-0.5">
-                        Reads the exact script currently loaded in memory to ensure perfect continuity.
+                        Uses the current script to generate SEO-optimized title, description, tags, and pinned comment.
                       </p>
                     </div>
                   </div>
@@ -788,13 +767,15 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                     className="btn-primary"
                   >
                     {ytGenerating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-                    {ytGenerating ? 'Architecting...' : 'Generate from AI Engine'}
+                    {ytGenerating ? 'Generating...' : 'Generate from Gemini'}
                   </MotionButton>
                 </MotionPanel>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* YouTube Metadata */}
                   <Panel title="YouTube Metadata Architect" icon={<Youtube size={15} />} action={<Badge variant="danger">YouTube Shorts</Badge>}>
                     <div className="p-4 space-y-4">
+                      {/* Title */}
                       <div>
                         <label className="text-xs font-medium text-ink-200 mb-1.5 block">Optimized Title</label>
                         <input
@@ -806,6 +787,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                         <p className="text-[10px] text-ink-400 mt-1">{ytTitle.length}/100 characters</p>
                       </div>
 
+                      {/* Description */}
                       <div>
                         <label className="text-xs font-medium text-ink-200 mb-1.5 block">Deep Description</label>
                         <textarea
@@ -817,6 +799,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                         />
                       </div>
 
+                      {/* Tags */}
                       <div>
                         <label className="text-xs font-medium text-ink-200 mb-1.5 block">Tag String</label>
                         <div className="flex flex-wrap gap-1.5 p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.04] min-h-[60px]">
@@ -870,6 +853,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                         </p>
                       </div>
 
+                      {/* Made with AI toggle */}
                       <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
                         <div className="flex items-center gap-2">
                           <Sparkles size={14} className="text-accent" />
@@ -881,6 +865,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                         <button
                           onClick={() => setMadeWithAI(!madeWithAI)}
                           className={`relative w-9 h-5 rounded-full transition-all ${madeWithAI ? 'bg-accent' : 'bg-ink-600'}`}
+                          style={madeWithAI ? { boxShadow: '0 0 12px var(--accent-glow)' } : {}}
                         >
                           <motion.span
                             className="absolute top-0.5 w-4 h-4 rounded-full bg-white"
@@ -892,6 +877,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                     </div>
                   </Panel>
 
+                  {/* Thumbnail Frame Picker */}
                   <Panel title="AI Thumbnail Frame Picker" icon={<Image size={15} />}>
                     <div className="p-4">
                       {thumbnailFrame ? (
@@ -933,6 +919,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                     </div>
                   </Panel>
 
+                  {/* Pinned Comment Generator */}
                   <Panel title="Automated Pinned Comment" icon={<Pin size={15} />}>
                     <div className="p-4 space-y-3">
                       <textarea
@@ -1232,6 +1219,7 @@ export function CaptionsModule({ seriesId }: { seriesId: string | null }) {
                         <button
                           onClick={() => setEmojiInjector(!emojiInjector)}
                           className={`relative w-9 h-5 rounded-full transition-all ${emojiInjector ? 'bg-accent' : 'bg-ink-600'}`}
+                          style={emojiInjector ? { boxShadow: '0 0 12px var(--accent-glow)' } : {}}
                         >
                           <motion.span
                             className="absolute top-0.5 w-4 h-4 rounded-full bg-white"

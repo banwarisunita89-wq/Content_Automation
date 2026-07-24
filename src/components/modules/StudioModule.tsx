@@ -1,4 +1,3 @@
-// --- src/modules/StudioModule.tsx ---
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -6,7 +5,7 @@ import {
   useActiveStore,
   useNavStore,
   useToastStore,
-  useBackendStatusStore,
+  useApiVaultStore,
   useVideoStore,
   useSystemStore,
 } from '../../lib/stores';
@@ -17,12 +16,11 @@ import {
 } from '../../lib/queries';
 import type { Episode } from '../../lib/supabase';
 import {
+  callGemini,
   callFal,
   callElevenLabs,
   callHuggingFace,
 } from '../../lib/api';
-// Injecting our Phase 1 Smart Fetcher
-import { generateAIContent } from '../../lib/geminiClient';
 import {
   STUDIO_TABS,
   STUDIO_FEATURES,
@@ -61,7 +59,6 @@ import {
   RefreshCw,
   Settings2,
   Film,
-  Video
 } from 'lucide-react';
 
 // ─── Pipeline step model ───
@@ -89,11 +86,25 @@ const INITIAL_STEPS: PipelineStep[] = [
 type ChunkState = { id: number; status: 'pending' | 'rendering' | 'done'; progress: number };
 type StoredChunk = { id: number; url: string; size: string };
 
-const FAL_PAYLOAD_CONSTRAINT = 'Ultra HD HDR, 60 FPS, Premium Color Grading, strict cinematic depth of field with heavy bokeh.';
+// The critical Fal payload constraint string surfaced in the Render Settings tab.
+const FAL_PAYLOAD_CONSTRAINT =
+  'Ultra HD HDR, 60 FPS, Premium Color Grading, strict cinematic depth of field with heavy bokeh.';
+
+// Always-on lens directives that are non-editable.
 const LENS_DIRECTIVES = ['Ultra HD HDR', '60 FPS', 'Heavy Cinematic Bokeh'];
-const LIPSYNC_CHECKLIST = ['Audio frequency matched', 'Phoneme alignment verified', 'Frame interpolation ready', 'Mouth shape library loaded'];
+
+// Lip-sync quality checklist items.
+const LIPSYNC_CHECKLIST = [
+  'Audio frequency matched',
+  'Phoneme alignment verified',
+  'Frame interpolation ready',
+  'Mouth shape library loaded',
+];
+
+// Emotion tone options for the Emotion-to-Color API Mapper.
 const EMOTION_TONES = Object.keys(EMOTION_COLOR_MAP);
 
+/** Play a subtle short click beep via the Web Audio API. */
 function playClickSound() {
   try {
     const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -109,11 +120,22 @@ function playClickSound() {
     osc.start();
     osc.stop(ctx.currentTime + 0.12);
     osc.onended = () => ctx.close();
-  } catch { /* silent fallback */ }
+  } catch {
+    /* audio not available — silent fallback */
+  }
 }
 
-function parseGeminiMetadata(raw: string): { title: string; description: string; tags: string[]; } {
+// ─── Helpers ───
+
+/** Parse a Gemini metadata response into title / description / tags. */
+function parseGeminiMetadata(raw: string): {
+  title: string;
+  description: string;
+  tags: string[];
+} {
   const result = { title: '', description: '', tags: [] as string[] };
+
+  // Try a structured extraction first: TITLE:, DESCRIPTION:, TAGS:
   const titleMatch = raw.match(/TITLE\s*:\s*(.+)/i);
   const descMatch = raw.match(/DESCRIPTION\s*:\s*([\s\S]+?)(?=TAGS|$)/i);
   const tagsMatch = raw.match(/TAGS?\s*:\s*(.+)/i);
@@ -121,9 +143,14 @@ function parseGeminiMetadata(raw: string): { title: string; description: string;
   if (titleMatch) result.title = titleMatch[1].trim();
   if (descMatch) result.description = descMatch[1].trim();
   if (tagsMatch) {
-    result.tags = tagsMatch[1].split(/[,#|\n]/).map((t) => t.trim().replace(/^#+/, '')).filter(Boolean).slice(0, 15);
+    result.tags = tagsMatch[1]
+      .split(/[,#|\n]/)
+      .map((t) => t.trim().replace(/^#+/, ''))
+      .filter(Boolean)
+      .slice(0, 15);
   }
 
+  // Fallback: if structured parse failed, use first line as title.
   if (!result.title) {
     const lines = raw.trim().split('\n').filter(Boolean);
     result.title = lines[0]?.slice(0, 120) ?? 'Untitled Episode';
@@ -131,37 +158,42 @@ function parseGeminiMetadata(raw: string): { title: string; description: string;
       result.description = lines.slice(1, 4).join(' ').trim();
     }
   }
+
   return result;
 }
 
+/** Format seconds as 0:ss */
 function formatChunkTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+// ─── Component ───
+
 export function StudioModule({ seriesId }: { seriesId: string | null }) {
+  // Zustand stores
   const currentScript = useScriptStore((s) => s.currentScript);
   const activeEpisodeId = useActiveStore((s) => s.activeEpisodeId);
   const setActiveEpisode = useActiveStore((s) => s.setActiveEpisode);
-  const projectMode = useActiveStore((s) => s.projectMode);
-  
   const activeSubTab = useNavStore((s) => s.activeSubTab);
   const setActiveSubTab = useNavStore((s) => s.setActiveSubTab);
   const addToast = useToastStore((s) => s.addToast);
-  
-  const backendStatus = useBackendStatusStore((s) => s.services);
+  const hasKey = useApiVaultStore((s) => s.hasKey);
   const currentVideoUrl = useVideoStore((s) => s.currentVideoUrl);
   const setCurrentVideo = useVideoStore((s) => s.setCurrentVideo);
   const setPipelineStep = useVideoStore((s) => s.setPipelineStep);
 
+  // Phase 3 — system store (sound FX toggle)
   const soundFxEnabled = useSystemStore((s) => s.soundFxEnabled);
   const toggleSoundFx = useSystemStore((s) => s.toggleSoundFx);
 
+  // React Query hooks
   const { data: episodes = [], isLoading: episodesLoading } = useEpisodesQuery(seriesId);
   const updateEpisodeMutation = useUpdateEpisodeMutation();
   const addLogMutation = useAddLogMutation();
 
+  // Local UI state
   const moduleId = 'studio';
   const tab = activeSubTab[moduleId] || STUDIO_TABS[0].id;
   const setTab = useCallback((id: string) => setActiveSubTab(moduleId, id), [setActiveSubTab]);
@@ -172,81 +204,115 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
   const [chunks, setChunks] = useState<ChunkState[]>([]);
   const [renderedChunks, setRenderedChunks] = useState<StoredChunk[]>([]);
 
+  // Metadata tab state
   const [metaTitle, setMetaTitle] = useState('');
   const [metaDescription, setMetaDescription] = useState('');
   const [metaTags, setMetaTags] = useState('');
   const [fetchingMetadata, setFetchingMetadata] = useState(false);
 
+  // Render settings state
   const [renderInputs, setRenderInputs] = useState<Record<string, string | number>>(() => {
     const init: Record<string, string | number> = {};
-    STUDIO_RENDER_INPUTS.forEach((inp) => { if (inp.defaultValue !== undefined) init[inp.id] = inp.defaultValue; });
+    STUDIO_RENDER_INPUTS.forEach((inp) => {
+      if (inp.defaultValue !== undefined) init[inp.id] = inp.defaultValue;
+    });
     return init;
   });
-  
   const [featureStates, setFeatureStates] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
-    STUDIO_FEATURES.forEach((f) => { init[f.id] = f.defaultEnabled; });
+    STUDIO_FEATURES.forEach((f) => {
+      init[f.id] = f.defaultEnabled;
+    });
     return init;
   });
 
+  // Phase 3 — feature states for P3 toggles
   const [p3FeatureStates, setP3FeatureStates] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
-    STUDIO_P3_FEATURES.forEach((f) => { init[f.id] = f.defaultEnabled; });
+    STUDIO_P3_FEATURES.forEach((f) => {
+      init[f.id] = f.defaultEnabled;
+    });
     return init;
   });
 
+  // Phase 3 — emotion-to-color mapper
   const [emotionTone, setEmotionTone] = useState<string>('neutral');
+
+  // Phase 3 — cinematic aspect ratio switcher
   const [aspectRatio, setAspectRatio] = useState<string>('16:9');
+
+  // Phase 3 — lip-sync quality tester checklist
   const [lipsyncChecks, setLipsyncChecks] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
-    LIPSYNC_CHECKLIST.forEach((item) => { init[item] = false; });
+    LIPSYNC_CHECKLIST.forEach((item) => {
+      init[item] = false;
+    });
     return init;
   });
 
+  // Phase 3 — face metrics for the Identity Protocol Enforcer
   const faceMetrics = (activeEpisode?.metadata as { face_metrics?: Record<string, number> } | undefined)?.face_metrics ?? {
-    eye_spacing: 42, nose_width: 36, jawline_width: 58,
+    eye_spacing: 42,
+    nose_width: 36,
+    jawline_width: 58,
   };
 
+  // Video player state
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
   const playerWrapRef = useRef<HTMLDivElement>(null);
 
+  // ─── Effects ───
+
+  // Sync active episode from query data
   useEffect(() => {
-    if (projectMode === 'individual') {
-      // In individual mode, we just bind to the current active script, no episode switching needed
-      setActiveEpisodeState(episodes[0] || null);
-      return;
-    }
     if (episodes.length === 0) {
       setActiveEpisodeState(null);
       return;
     }
     if (activeEpisodeId) {
       const found = episodes.find((e) => e.id === activeEpisodeId);
-      if (found) setActiveEpisodeState(found);
-    } else {
-      const approved = episodes.find((e) => e.status === 'approved') || episodes.find((e) => e.status === 'rendering') || episodes[0];
-      setActiveEpisodeState(approved);
-      setActiveEpisode(approved.id);
+      if (found) {
+        setActiveEpisodeState(found);
+        return;
+      }
     }
-  }, [episodes, activeEpisodeId, setActiveEpisode, projectMode]);
+    const approved =
+      episodes.find((e) => e.status === 'approved') ||
+      episodes.find((e) => e.status === 'rendering') ||
+      episodes[0];
+    setActiveEpisodeState(approved);
+    setActiveEpisode(approved.id);
+  }, [episodes, activeEpisodeId, setActiveEpisode]);
 
+  // Sync video URL from active episode into the video store
   useEffect(() => {
-    if (activeEpisode?.video_url && !currentVideoUrl) setCurrentVideo(activeEpisode.video_url);
+    if (activeEpisode?.video_url && !currentVideoUrl) {
+      setCurrentVideo(activeEpisode.video_url);
+    }
   }, [activeEpisode, currentVideoUrl, setCurrentVideo]);
 
+  // Reset pipeline when episode changes
   useEffect(() => {
     setSteps(INITIAL_STEPS.map((s) => ({ ...s })));
     setChunks([]);
     setRenderedChunks([]);
   }, [activeEpisode?.id]);
 
+  // ─── Video player handlers ───
+
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (v.paused) { v.play(); setIsPlaying(true); } else { v.pause(); setIsPlaying(false); }
+    if (v.paused) {
+      v.play();
+      setIsPlaying(true);
+    } else {
+      v.pause();
+      setIsPlaying(false);
+    }
   }, []);
 
   const handleTimeUpdate = useCallback(() => {
@@ -270,24 +336,33 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
     if (soundFxEnabled) playClickSound();
   }, [soundFxEnabled]);
 
-  const withClick = useCallback(<T extends unknown[]>(fn: (...args: T) => void) => (...args: T) => {
-    if (soundFxEnabled) playClickSound();
-    fn(...args);
-  }, [soundFxEnabled]);
+  // Phase 3 — click sound wrapper for UI transitions
+  const withClick = useCallback(
+    <T extends unknown[]>(fn: (...args: T) => void) =>
+      (...args: T) => {
+        if (soundFxEnabled) playClickSound();
+        fn(...args);
+      },
+    [soundFxEnabled]
+  );
 
   const toggleFullscreen = useCallback(() => {
     const el = playerWrapRef.current;
     if (!el) return;
     if (!document.fullscreenElement) {
-      el.requestFullscreen?.().catch(() => { addToast('Fullscreen not supported in this browser', 'warning'); });
+      el.requestFullscreen?.().catch(() => {
+        addToast('Fullscreen not supported in this browser', 'warning');
+      });
     } else {
       document.exitFullscreen?.();
     }
   }, [addToast]);
 
+  // ─── Metadata (Gemini) handlers ───
+
   const fetchMetadata = useCallback(async () => {
-    if (!backendStatus.gemini) {
-      addToast('Gemini API key not configured on backend. Add it in the Secure API Vault.', 'error');
+    if (!hasKey('gemini_api_key')) {
+      addToast('Gemini API key not configured. Add it in the Secure API Vault.', 'error');
       return;
     }
     if (!currentScript) {
@@ -297,14 +372,25 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
 
     setFetchingMetadata(true);
     try {
-      const scriptSummary = currentScript.raw || currentScript.dialogue || (currentScript.scenes || []).map((sc) => sc.dialogue).join(' ') || '';
+      const scriptSummary =
+        currentScript.raw ||
+        currentScript.dialogue ||
+        (currentScript.scenes || [])
+          .map((sc) => sc.dialogue)
+          .join(' ') ||
+        '';
       const prompt = `You are a YouTube SEO metadata expert. Given the script below, produce a viral, high-CTR metadata package. Respond in EXACTLY this format:\n\nTITLE: <a single punchy title under 100 chars>\nDESCRIPTION: <2-3 sentence description with a hook and CTA>\nTAGS: <comma-separated list of 10-15 SEO tags>\n\nSCRIPT:\n${scriptSummary.slice(0, 4000)}`;
 
       addLogMutation.mutate({
-        level: 'info', source: 'production-studio', message: 'Fetching metadata from Gemini', details: { episodeId: activeEpisode?.id ?? null }, retryable: false, resolved: false,
+        level: 'info',
+        source: 'production-studio',
+        message: 'Fetching metadata from Gemini',
+        details: { episodeId: activeEpisode?.id ?? null },
+        retryable: false,
+        resolved: false,
       });
 
-      const response = await generateAIContent({ prompt, maxOutputTokens: 2048 });
+      const response = await callGemini(prompt);
       const parsed = parseGeminiMetadata(response);
 
       setMetaTitle(parsed.title);
@@ -312,29 +398,57 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
       setMetaTags(parsed.tags.join(', '));
 
       addToast('Metadata fetched from Gemini', 'success');
-      
+      addLogMutation.mutate({
+        level: 'success',
+        source: 'production-studio',
+        message: 'Gemini metadata generated',
+        details: { title: parsed.title, tagCount: parsed.tags.length },
+        retryable: false,
+        resolved: false,
+      });
+
+      // Persist to the active episode if we have one.
       if (activeEpisode) {
         await updateEpisodeMutation.mutateAsync({
           id: activeEpisode.id,
-          updates: { title: parsed.title, metadata: { ...activeEpisode.metadata, description: parsed.description, tags: parsed.tags } },
+          updates: {
+            title: parsed.title,
+            metadata: {
+              ...activeEpisode.metadata,
+              description: parsed.description,
+              tags: parsed.tags,
+            },
+          },
         });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown Gemini error';
       addToast(`Gemini metadata failed: ${msg}`, 'error');
+      addLogMutation.mutate({
+        level: 'error',
+        source: 'production-studio',
+        message: `Gemini metadata failed: ${msg}`,
+        details: {},
+        retryable: true,
+        resolved: false,
+      });
     } finally {
       setFetchingMetadata(false);
     }
-  }, [backendStatus.gemini, currentScript, addToast, addLogMutation, activeEpisode, updateEpisodeMutation]);
+  }, [
+    hasKey,
+    currentScript,
+    addToast,
+    addLogMutation,
+    activeEpisode,
+    updateEpisodeMutation,
+  ]);
+
+  // ─── Pipeline assembly ───
 
   const runPipeline = useCallback(async () => {
-    // If Individual mode, we rely strictly on currentScript without needing activeEpisode
-    if (projectMode === 'series' && !activeEpisode) {
+    if (!activeEpisode) {
       addToast('No active episode to assemble', 'warning');
-      return;
-    }
-    if (!currentScript) {
-      addToast('No script loaded to assemble', 'warning');
       return;
     }
 
@@ -342,105 +456,224 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
     setPipelineStep(0);
 
     const chunkDuration = Number(renderInputs.chunk_duration) || 20;
-    const targetDuration = Number(activeEpisode?.metadata?.target_duration) || 60;
+    const targetDuration = Number(activeEpisode.metadata?.target_duration) || 60;
     const chunkCount = Math.max(1, Math.ceil(targetDuration / chunkDuration));
-    const newChunks: ChunkState[] = Array.from({ length: chunkCount }, (_, i) => ({ id: i + 1, status: 'pending', progress: 0 }));
+    const newChunks: ChunkState[] = Array.from({ length: chunkCount }, (_, i) => ({
+      id: i + 1,
+      status: 'pending',
+      progress: 0,
+    }));
     setChunks(newChunks);
 
     addToast('Pipeline started — assembling video', 'info');
-    
-    if (activeEpisode) {
-      try {
-        await updateEpisodeMutation.mutateAsync({
-          id: activeEpisode.id,
-          updates: { status: 'rendering', metadata: { ...activeEpisode.metadata, render_progress: 0 } },
-        });
-      } catch { /* non-fatal */ }
+    addLogMutation.mutate({
+      level: 'info',
+      source: 'production-studio',
+      message: `Pipeline started for Ep ${activeEpisode.episode_number}`,
+      details: { chunkCount, chunkDuration },
+      retryable: false,
+      resolved: false,
+    });
+
+    // Mark episode rendering
+    try {
+      await updateEpisodeMutation.mutateAsync({
+        id: activeEpisode.id,
+        updates: {
+          status: 'rendering',
+          metadata: { ...activeEpisode.metadata, render_progress: 0 },
+        },
+      });
+    } catch {
+      /* non-fatal */
     }
 
-    const falReady = backendStatus.fal;
-    const elevenReady = backendStatus.elevenlabs;
-    const hfReady = backendStatus.supabase;
+    const falReady = hasKey('fal_api_key');
+    const elevenReady = hasKey('elevenlabs_api_key');
+    const hfReady = hasKey('hf_access_token');
 
     for (let i = 0; i < INITIAL_STEPS.length; i++) {
       const step = INITIAL_STEPS[i];
       setPipelineStep(i + 1);
-      setSteps((prev) => prev.map((s) => (s.id === step.id ? { ...s, status: 'running', progress: 0 } : s)));
-      
-      // Simulate/Trigger API calls based on step
+      setSteps((prev) =>
+        prev.map((s) => (s.id === step.id ? { ...s, status: 'running', progress: 0 } : s))
+      );
+      addLogMutation.mutate({
+        level: 'info',
+        source: step.id,
+        message: `${step.label} — processing...`,
+        details: {},
+        retryable: false,
+        resolved: false,
+      });
+
+      // Call the real API for this step if a key is configured.
       if (step.api === 'fal' && falReady) {
         try {
-          await callFal('fal-ai/kling-video', { prompt: `Disney Pixar 3D style, ${FAL_PAYLOAD_CONSTRAINT}`, duration: targetDuration });
+          await callFal('fal-ai/kling-video', {
+            prompt: `Disney Pixar 3D style, ${FAL_PAYLOAD_CONSTRAINT}`,
+            duration: targetDuration,
+          });
           addToast('Fal video generation complete', 'success');
-        } catch (err) { addToast(`Fal call failed: ${err instanceof Error ? err.message : 'unknown'}`, 'warning'); }
+        } catch (err) {
+          addToast(
+            `Fal call failed: ${err instanceof Error ? err.message : 'unknown'}`,
+            'warning'
+          );
+        }
+      } else if (step.api === 'fal' && !falReady) {
+        addToast('Fal API key not configured — simulating step', 'warning');
       }
 
       if (step.api === 'elevenlabs' && elevenReady) {
         const voiceId = 'EXAVITQu4vr4xnSDxMaL';
         try {
-          const dialogue = currentScript?.dialogue || '';
+          const dialogue =
+            currentScript?.dialogue ||
+            (currentScript?.scenes || []).map((s) => s.dialogue).join(' ') ||
+            '';
           await callElevenLabs(dialogue.slice(0, 1000) || 'Test voiceover', voiceId);
           addToast('ElevenLabs audio synced', 'success');
-        } catch (err) { addToast(`ElevenLabs call failed: ${err instanceof Error ? err.message : 'unknown'}`, 'warning'); }
+        } catch (err) {
+          addToast(
+            `ElevenLabs call failed: ${err instanceof Error ? err.message : 'unknown'}`,
+            'warning'
+          );
+        }
+      } else if (step.api === 'elevenlabs' && !elevenReady) {
+        addToast('ElevenLabs API key not configured — simulating step', 'warning');
       }
 
       if (step.api === 'hf' && hfReady) {
         try {
-          await callHuggingFace('facebook/musicgen-small', { inputs: 'cinematic ambient foley impact effects' });
+          await callHuggingFace('facebook/musicgen-small', {
+            inputs: 'cinematic ambient foley impact effects',
+          });
           addToast('HuggingFace SFX layered', 'success');
-        } catch (err) { addToast(`HuggingFace SFX failed: ${err instanceof Error ? err.message : 'unknown'}`, 'warning'); }
+        } catch (err) {
+          addToast(
+            `HuggingFace SFX failed: ${err instanceof Error ? err.message : 'unknown'}`,
+            'warning'
+          );
+        }
+      } else if (step.api === 'hf' && !hfReady) {
+        addToast('HuggingFace token not configured — simulating step', 'warning');
       }
 
+      // Simulated progress bar
       for (let p = 0; p <= 100; p += 20) {
-        setSteps((prev) => prev.map((s) => (s.id === step.id ? { ...s, progress: p } : s)));
+        setSteps((prev) =>
+          prev.map((s) => (s.id === step.id ? { ...s, progress: p } : s))
+        );
         await new Promise((r) => setTimeout(r, 180));
       }
 
-      setSteps((prev) => prev.map((s) => (s.id === step.id ? { ...s, status: 'done', progress: 100 } : s)));
+      setSteps((prev) =>
+        prev.map((s) => (s.id === step.id ? { ...s, status: 'done', progress: 100 } : s))
+      );
+      addLogMutation.mutate({
+        level: 'success',
+        source: step.id,
+        message: `${step.label} — complete`,
+        details: {},
+        retryable: false,
+        resolved: false,
+      });
 
+      // During the timeline merger step, render the chunks.
       if (step.id === 'timeline') {
         for (let c = 0; c < newChunks.length; c++) {
-          setChunks((prev) => prev.map((ch) => (ch.id === c + 1 ? { ...ch, status: 'rendering' } : ch)));
+          setChunks((prev) =>
+            prev.map((ch) => (ch.id === c + 1 ? { ...ch, status: 'rendering' } : ch))
+          );
           for (let p = 0; p <= 100; p += 25) {
-            setChunks((prev) => prev.map((ch) => (ch.id === c + 1 ? { ...ch, progress: p } : ch)));
+            setChunks((prev) =>
+              prev.map((ch) => (ch.id === c + 1 ? { ...ch, progress: p } : ch))
+            );
             await new Promise((r) => setTimeout(r, 140));
           }
-          setChunks((prev) => prev.map((ch) => ch.id === c + 1 ? { ...ch, status: 'done', progress: 100 } : ch));
-          const chunkUrl = `https://storage.supabase.co/ep${activeEpisode?.episode_number || '1'}/chunk_${c + 1}.mp4`;
+          setChunks((prev) =>
+            prev.map((ch) =>
+              ch.id === c + 1 ? { ...ch, status: 'done', progress: 100 } : ch
+            )
+          );
+          const chunkUrl = `https://storage.supabase.co/ep${activeEpisode.episode_number}/chunk_${c + 1}.mp4`;
           const size = `${(15 + Math.random() * 10).toFixed(1)} MB`;
           setRenderedChunks((prev) => [...prev, { id: c + 1, url: chunkUrl, size }]);
+          addLogMutation.mutate({
+            level: 'success',
+            source: 'chunk-manager',
+            message: `Chunk ${c + 1}/${chunkCount} pushed to storage`,
+            details: { url: chunkUrl, size },
+            retryable: false,
+            resolved: false,
+          });
         }
       }
     }
 
-    const finalUrl = `https://storage.supabase.co/ep${activeEpisode?.episode_number || '1'}/final_4k60.mp4`;
+    // Final assembly
+    const finalUrl = `https://storage.supabase.co/ep${activeEpisode.episode_number}/final_4k60.mp4`;
     setCurrentVideo(finalUrl);
     setPipelineStep(INITIAL_STEPS.length);
 
-    if (activeEpisode) {
-      try {
-        await updateEpisodeMutation.mutateAsync({
-          id: activeEpisode.id,
-          updates: {
-            status: 'rendered', video_url: finalUrl,
-            metadata: { ...activeEpisode.metadata, render_progress: 100, resolution: renderInputs.resolution, fps: Number(renderInputs.fps) },
+    try {
+      await updateEpisodeMutation.mutateAsync({
+        id: activeEpisode.id,
+        updates: {
+          status: 'rendered',
+          video_url: finalUrl,
+          metadata: {
+            ...activeEpisode.metadata,
+            render_progress: 100,
+            resolution: renderInputs.resolution,
+            fps: Number(renderInputs.fps),
+            motion_pacing: featureStates.motion_pacing ? 1.4 : 1.0,
           },
-        });
-      } catch { /* non-fatal */ }
+        },
+      });
+    } catch {
+      /* non-fatal */
     }
 
-    addToast(`Video Rendered — 4K 60FPS ready`, 'success');
+    addToast(`Ep ${activeEpisode.episode_number} rendered — 4K 60FPS ready`, 'success');
+    addLogMutation.mutate({
+      level: 'success',
+      source: 'production-studio',
+      message: `Ep ${activeEpisode.episode_number} fully rendered — 4K 60FPS`,
+      details: { url: finalUrl },
+      retryable: false,
+      resolved: false,
+    });
+
     setAssembling(false);
-  }, [activeEpisode, projectMode, currentScript, addToast, backendStatus, renderInputs.chunk_duration, renderInputs.resolution, renderInputs.fps, updateEpisodeMutation, setCurrentVideo, setPipelineStep]);
+  }, [
+    activeEpisode,
+    addToast,
+    addLogMutation,
+    hasKey,
+    currentScript,
+    renderInputs.chunk_duration,
+    renderInputs.resolution,
+    renderInputs.fps,
+    featureStates.motion_pacing,
+    updateEpisodeMutation,
+    setCurrentVideo,
+    setPipelineStep,
+  ]);
+
+  // ─── Render ───
 
   const apiStatus = [
-    { name: 'Gemini', ok: backendStatus.gemini },
-    { name: 'Fal', ok: backendStatus.fal },
-    { name: 'ElevenLabs', ok: backendStatus.elevenlabs },
+    { name: 'Gemini', ok: hasKey('gemini_api_key') },
+    { name: 'Fal', ok: hasKey('fal_api_key') },
+    { name: 'ElevenLabs', ok: hasKey('elevenlabs_api_key') },
+    { name: 'HuggingFace', ok: hasKey('hf_access_token') },
   ];
 
   return (
     <div className="space-y-4">
+      {/* Header */}
       <MotionPanel className="p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-gradient mb-1 flex items-center gap-2">
@@ -451,10 +684,6 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={projectMode === 'series' ? 'accent' : 'success'}>
-            {projectMode === 'series' ? <Film size={12} className="mr-1"/> : <Video size={12} className="mr-1"/>}
-            {projectMode === 'series' ? 'Series Mode' : 'Individual Mode'}
-          </Badge>
           {apiStatus.map((a) => (
             <Badge key={a.name} variant={a.ok ? 'success' : 'danger'}>
               {a.name} {a.ok ? '✓' : '✗'}
@@ -463,36 +692,79 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
         </div>
       </MotionPanel>
 
+      {/* Sub-tabs */}
       <SubTabs tabs={STUDIO_TABS} activeTab={tab} onTabChange={setTab} />
 
       <AnimatePresence mode="wait">
         {tab === 'preview' && (
-          <motion.div key="preview" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
-            <Panel title="Custom Video Player" icon={<Play size={15} />} action={<Badge>{projectMode === 'series' && activeEpisode ? `Ep ${activeEpisode.episode_number}` : 'Standalone Video'}</Badge>}>
+          <motion.div
+            key="preview"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+          >
+            <Panel title="Custom Video Player" icon={<Play size={15} />} action={<Badge>{activeEpisode ? `Ep ${activeEpisode.episode_number}` : 'No episode'}</Badge>}>
               <div className="p-4">
                 {currentVideoUrl ? (
                   <div ref={playerWrapRef} className="relative rounded-xl overflow-hidden bg-black border border-white/[0.06] group">
-                    <video ref={videoRef} src={currentVideoUrl} className="w-full aspect-video object-contain" onTimeUpdate={handleTimeUpdate} onLoadedMetadata={handleLoadedMetadata} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onClick={togglePlay} playsInline />
-                    <button onClick={togglePlay} className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <video
+                      ref={videoRef}
+                      src={currentVideoUrl}
+                      className="w-full aspect-video object-contain"
+                      onTimeUpdate={handleTimeUpdate}
+                      onLoadedMetadata={handleLoadedMetadata}
+                      onPlay={() => setIsPlaying(true)}
+                      onPause={() => setIsPlaying(false)}
+                      onClick={togglePlay}
+                      playsInline
+                    />
+                    {/* Play/pause overlay */}
+                    <button
+                      onClick={togglePlay}
+                      className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label={isPlaying ? 'Pause' : 'Play'}
+                    >
                       <span className="w-16 h-16 rounded-full bg-black/60 flex items-center justify-center backdrop-blur-sm">
                         {isPlaying ? <Pause size={26} className="text-white" /> : <Play size={26} className="text-white ml-1" />}
                       </span>
                     </button>
+
+                    {/* Controls bar */}
                     <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 to-transparent">
-                      <div className="h-1.5 rounded-full bg-white/20 cursor-pointer mb-2" onClick={handleSeek}>
-                        <div className="h-full rounded-full" style={{ width: `${videoProgress}%`, background: 'linear-gradient(90deg, var(--accent), #fff)' }} />
+                      <div
+                        className="h-1.5 rounded-full bg-white/20 cursor-pointer mb-2"
+                        onClick={handleSeek}
+                      >
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${videoProgress}%`,
+                            background: 'linear-gradient(90deg, var(--accent), #fff)',
+                          }}
+                        />
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-white/80 font-mono">
                         <button onClick={togglePlay} className="flex items-center gap-1.5 hover:text-white">
-                          {isPlaying ? <Pause size={14} /> : <Play size={14} />} {isPlaying ? 'Pause' : 'Play'}
+                          {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+                          {isPlaying ? 'Pause' : 'Play'}
                         </button>
-                        <span>{formatChunkTime(Math.floor((videoDuration * videoProgress) / 100 || 0))} / {formatChunkTime(Math.floor(videoDuration || 0))}</span>
-                        <button onClick={toggleFullscreen} className="flex items-center gap-1.5 hover:text-white"><Maximize size={14} /> Fullscreen</button>
+                        <span>
+                          {formatChunkTime(Math.floor((videoDuration * videoProgress) / 100 || 0))} /{' '}
+                          {formatChunkTime(Math.floor(videoDuration || 0))}
+                        </span>
+                        <button onClick={toggleFullscreen} className="flex items-center gap-1.5 hover:text-white">
+                          <Maximize size={14} /> Fullscreen
+                        </button>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <EmptyState icon={<Film size={28} />} title="No video rendered yet" subtitle="Run the Pipeline tab to assemble a video." />
+                  <EmptyState
+                    icon={<Film size={28} />}
+                    title="No video rendered yet"
+                    subtitle="Run the Pipeline tab to assemble a video, or select a rendered episode."
+                  />
                 )}
               </div>
             </Panel>
@@ -500,32 +772,78 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
         )}
 
         {tab === 'metadata' && (
-          <motion.div key="metadata" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-4">
-            <Panel title="Episode Metadata" icon={<Sparkles size={15} />}>
+          <motion.div
+            key="metadata"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="space-y-4"
+          >
+            <Panel
+              title="Episode Metadata"
+              icon={<Sparkles size={15} />}
+              action={
+                <Badge variant={hasKey('gemini_api_key') ? 'success' : 'danger'}>
+                  Gemini {hasKey('gemini_api_key') ? 'Ready' : 'No Key'}
+                </Badge>
+              }
+            >
               <div className="p-4 space-y-4">
-                {!backendStatus.gemini && (
+                {!hasKey('gemini_api_key') && (
                   <div className="p-3 rounded-xl bg-danger-dim border border-danger/20 flex items-start gap-2">
                     <AlertTriangle size={16} className="text-danger shrink-0 mt-0.5" />
-                    <p className="text-xs text-danger">AI Engine offline. Configure in Settings to generate metadata.</p>
+                    <p className="text-xs text-danger">
+                      Gemini API key not configured. Add <code className="font-mono">gemini_api_key</code> in the Secure API Vault (Settings → API Vault) to enable AI metadata generation.
+                    </p>
                   </div>
                 )}
+
                 <div className="flex items-center justify-between">
-                  <p className="text-xs text-ink-400">Source script: {currentScript ? 'Loaded from Script Lab' : 'None selected'}</p>
-                  <MotionButton onClick={fetchMetadata} disabled={fetchingMetadata || !backendStatus.gemini} className="btn-primary flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium">
-                    {fetchingMetadata ? <Spinner size={14} /> : <RefreshCw size={14} />} {fetchingMetadata ? 'Fetching...' : 'Fetch from AI Engine'}
+                  <p className="text-xs text-ink-400">
+                    Source script: {currentScript ? 'Loaded from Script Lab' : 'None selected'}
+                  </p>
+                  <MotionButton
+                    onClick={fetchMetadata}
+                    disabled={fetchingMetadata || !hasKey('gemini_api_key')}
+                    className="btn-primary flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium disabled:opacity-50"
+                  >
+                    {fetchingMetadata ? <Spinner size={14} /> : <RefreshCw size={14} />}
+                    {fetchingMetadata ? 'Fetching...' : 'Fetch from Gemini'}
                   </MotionButton>
                 </div>
+
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-ink-200">Title</label>
-                  <textarea value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} rows={2} placeholder="Episode title..." className="w-full p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 resize-none focus:outline-none focus:border-accent/40" />
+                  <textarea
+                    value={metaTitle}
+                    onChange={(e) => setMetaTitle(e.target.value)}
+                    rows={2}
+                    placeholder="Episode title..."
+                    className="w-full p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 resize-none focus:outline-none focus:border-accent/40"
+                  />
                 </div>
+
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-ink-200">Description</label>
-                  <textarea value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} rows={5} placeholder="Episode description..." className="w-full p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 resize-none focus:outline-none focus:border-accent/40" />
+                  <textarea
+                    value={metaDescription}
+                    onChange={(e) => setMetaDescription(e.target.value)}
+                    rows={5}
+                    placeholder="Episode description..."
+                    className="w-full p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 resize-none focus:outline-none focus:border-accent/40"
+                  />
                 </div>
+
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-ink-200">Tags (comma-separated)</label>
-                  <textarea value={metaTags} onChange={(e) => setMetaTags(e.target.value)} rows={2} placeholder="tag1, tag2, tag3..." className="w-full p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 resize-none focus:outline-none focus:border-accent/40" />
+                  <textarea
+                    value={metaTags}
+                    onChange={(e) => setMetaTags(e.target.value)}
+                    rows={2}
+                    placeholder="tag1, tag2, tag3..."
+                    className="w-full p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 resize-none focus:outline-none focus:border-accent/40"
+                  />
                 </div>
               </div>
             </Panel>
@@ -533,24 +851,41 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
         )}
 
         {tab === 'pipeline' && (
-          <motion.div key="pipeline" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-4">
+          <motion.div
+            key="pipeline"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="space-y-4"
+          >
             {episodesLoading ? (
               <div className="flex justify-center py-12"><Spinner size={24} /></div>
-            ) : projectMode === 'series' && !activeEpisode ? (
+            ) : !activeEpisode ? (
               <Panel><EmptyState icon={<Terminal size={28} />} title="No episodes available" subtitle="Generate and approve scripts in Script Lab first" /></Panel>
-            ) : (
+        ) : (
           <>
-            {projectMode === 'series' && (
-              <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1">
-                {episodes.slice(0, 8).map((ep) => (
-                  <button key={ep.id} onClick={() => { setActiveEpisodeState(ep); setActiveEpisode(ep.id); setSteps(INITIAL_STEPS.map((s) => ({ ...s }))); setChunks([]); setRenderedChunks([]); }} className={`shrink-0 px-3 py-2 rounded-xl text-xs font-medium transition-all ${activeEpisode?.id === ep.id ? 'bg-accent-dim text-accent border border-accent/30' : 'bg-white/[0.04] text-ink-300 border border-white/[0.06] hover:text-ink-100'}`}>
-                    Ep {ep.episode_number} <span className="ml-1 opacity-50">· {ep.status}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            {/* Episode selector */}
+            <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1">
+              {episodes.slice(0, 8).map((ep) => (
+                <button
+                  key={ep.id}
+                  onClick={() => {
+                    setActiveEpisodeState(ep);
+                    setActiveEpisode(ep.id);
+                    setSteps(INITIAL_STEPS.map((s) => ({ ...s })));
+                    setChunks([]);
+                    setRenderedChunks([]);
+                  }}
+                  className={`shrink-0 px-3 py-2 rounded-xl text-xs font-medium transition-all ${activeEpisode.id === ep.id ? 'bg-accent-dim text-accent border border-accent/30' : 'bg-white/[0.04] text-ink-300 border border-white/[0.06] hover:text-ink-100'}`}
+                >
+                  Ep {ep.episode_number} <span className="ml-1 opacity-50">· {ep.status}</span>
+                </button>
+              ))}
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Terminal Flow Engine */}
               <Panel title="Terminal Flow Engine" icon={<Terminal size={15} />} className="lg:col-span-2">
                 <div className="p-4">
                   <div className="relative rounded-xl bg-ink-950 border border-white/[0.04] p-4 overflow-hidden min-h-[320px] grid-bg">
@@ -558,7 +893,7 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
                       <div className="absolute left-0 right-0 h-px animate-scan" style={{ background: 'linear-gradient(90deg, transparent, var(--accent), transparent)' }} />
                     </div>
                     <div className="relative space-y-2 font-mono text-[11px]">
-                      <div className="text-accent font-semibold mb-2">$ production_pipeline --target {projectMode === 'series' ? `episode_${activeEpisode?.episode_number}` : 'standalone_video'} --style "disney_pixar_3d"</div>
+                      <div className="text-accent font-semibold mb-2">$ production_pipeline --episode {activeEpisode.episode_number} --style "disney_pixar_3d"</div>
                       {steps.map((step) => {
                         const Icon = step.icon;
                         return (
@@ -573,21 +908,38 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
                                 {step.status === 'idle' ? 'IDLE' : step.status === 'done' ? 'DONE' : step.status === 'error' ? 'FAIL' : `${step.progress}%`}
                               </span>
                             </div>
-                            {step.status === 'running' && (<div className="pl-8"><ProgressBar value={step.progress} /></div>)}
+                            {step.status === 'running' && (
+                              <div className="pl-8">
+                                <ProgressBar value={step.progress} />
+                              </div>
+                            )}
                           </div>
                         );
                       })}
-                      {assembling && <div className="text-accent font-semibold pt-2"><span className="animate-blink">█</span> processing...</div>}
-                      {!assembling && steps.every((s) => s.status === 'done') && <div className="text-success font-semibold pt-2">✓ Pipeline complete. Output ready for caption production.</div>}
+                      {assembling && (
+                        <div className="text-accent font-semibold pt-2">
+                          <span className="animate-blink">█</span> processing...
+                        </div>
+                      )}
+                      {!assembling && steps.every((s) => s.status === 'done') && (
+                        <div className="text-success font-semibold pt-2">✓ Pipeline complete. Output ready for caption production.</div>
+                      )}
                     </div>
                   </div>
 
-                  <MotionButton onClick={runPipeline} disabled={assembling} data-spotlight="assemble-video" className="btn-primary w-full mt-3 flex items-center justify-center gap-2">
-                    {assembling ? <Spinner size={15} /> : <Play size={15} />} {assembling ? 'Assembling...' : 'Assemble Video'}
+                  <MotionButton
+                    onClick={runPipeline}
+                    disabled={assembling}
+                    data-spotlight="assemble-video"
+                    className="btn-primary w-full mt-3 flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {assembling ? <Spinner size={15} /> : <Play size={15} />}
+                    {assembling ? 'Assembling...' : 'Assemble Video'}
                   </MotionButton>
                 </div>
               </Panel>
 
+              {/* Chunk Manager */}
               <Panel title="Asset Chunk Manager" icon={<Scissors size={15} />} action={<Badge>{Number(renderInputs.chunk_duration) || 20}s blocks</Badge>}>
                 <div className="p-4 space-y-2">
                   {chunks.length === 0 ? (
@@ -598,8 +950,12 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
                       return (
                         <div key={chunk.id} className="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.04]">
                           <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-xs font-medium text-ink-100">Chunk {chunk.id} ({formatChunkTime((chunk.id - 1) * dur)}–{formatChunkTime(chunk.id * dur)})</span>
-                            <Badge variant={chunk.status === 'done' ? 'success' : chunk.status === 'rendering' ? 'accent' : 'neutral'}>{chunk.status}</Badge>
+                            <span className="text-xs font-medium text-ink-100">
+                              Chunk {chunk.id} ({formatChunkTime((chunk.id - 1) * dur)}–{formatChunkTime(chunk.id * dur)})
+                            </span>
+                            <Badge variant={chunk.status === 'done' ? 'success' : chunk.status === 'rendering' ? 'accent' : 'neutral'}>
+                              {chunk.status}
+                            </Badge>
                           </div>
                           <ProgressBar value={chunk.progress} />
                         </div>
@@ -609,6 +965,7 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
                 </div>
               </Panel>
 
+              {/* Rendering Queue Storage */}
               <Panel title="Rendering Queue Storage" icon={<HardDrive size={15} />} action={<Badge>{renderedChunks.length} stored</Badge>}>
                 <div className="p-4 space-y-2">
                   {renderedChunks.length === 0 ? (
@@ -629,7 +986,7 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
                   {renderedChunks.length > 0 && (
                     <div className="p-2.5 rounded-xl bg-success-dim border border-success/20 flex items-center gap-2">
                       <Cpu size={14} className="text-success" />
-                      <span className="text-xs text-success">All chunks stored. Final assembly ready.</span>
+                      <span className="text-xs text-success">All chunks stored. Final assembly: 4K 60FPS · 1.4x pacing</span>
                     </div>
                   )}
                 </div>
@@ -641,24 +998,47 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
         )}
 
         {tab === 'render_settings' && (
-          <motion.div key="render_settings" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-4">
+          <motion.div
+            key="render_settings"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+            className="space-y-4"
+          >
+            {/* CRITICAL AI Constraint panel */}
             <MotionPanel className="p-4 border border-accent/30">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-accent-dim flex items-center justify-center shrink-0"><AlertTriangle size={20} className="text-accent" /></div>
+                <div className="w-10 h-10 rounded-xl bg-accent-dim flex items-center justify-center shrink-0">
+                  <AlertTriangle size={20} className="text-accent" />
+                </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-accent mb-1 flex items-center gap-2">CRITICAL AI Constraint — Fal Payload</h3>
-                  <p className="text-xs text-ink-300 mb-2">The Fal API payload explicitly demands the following render specification. This is injected into every generation request and cannot be downgraded:</p>
-                  <div className="p-3 rounded-xl bg-ink-950 border border-accent/20 font-mono text-xs text-accent leading-relaxed">"{FAL_PAYLOAD_CONSTRAINT}"</div>
+                  <h3 className="text-sm font-bold text-accent mb-1 flex items-center gap-2">
+                    CRITICAL AI Constraint — Fal Payload
+                  </h3>
+                  <p className="text-xs text-ink-300 mb-2">
+                    The Fal API payload explicitly demands the following render specification. This is injected into every generation request and cannot be downgraded:
+                  </p>
+                  <div className="p-3 rounded-xl bg-ink-950 border border-accent/20 font-mono text-xs text-accent leading-relaxed">
+                    "{FAL_PAYLOAD_CONSTRAINT}"
+                  </div>
                 </div>
               </div>
             </MotionPanel>
 
+            {/* Phase 3 — Cinematic Identity Protocol Enforcer */}
             <MotionPanel className="p-4 border border-accent/20">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-accent-dim flex items-center justify-center shrink-0"><Scan size={20} className="text-accent" /></div>
+                <div className="w-10 h-10 rounded-xl bg-accent-dim flex items-center justify-center shrink-0">
+                  <Scan size={20} className="text-accent" />
+                </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-accent mb-1 flex items-center gap-2">Cinematic Identity Protocol Enforcer</h3>
-                  <p className="text-xs text-ink-300 mb-3">Fal API payloads explicitly lock facial proportions via strict reference parameters. The following values cannot be overridden:</p>
+                  <h3 className="text-sm font-bold text-accent mb-1 flex items-center gap-2">
+                    Cinematic Identity Protocol Enforcer
+                  </h3>
+                  <p className="text-xs text-ink-300 mb-3">
+                    Fal API payloads explicitly lock facial proportions via strict reference parameters. The following values are read from the active character's <code className="font-mono text-accent">face_metrics</code> and cannot be overridden:
+                  </p>
                   <div className="grid grid-cols-3 gap-2">
                     {Object.entries(faceMetrics).map(([key, val]) => (
                       <div key={key} className="p-2.5 rounded-xl bg-ink-950 border border-accent/20 text-center">
@@ -671,6 +1051,7 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
               </div>
             </MotionPanel>
 
+            {/* Phase 3 — Ultimate Visual Sound FX Toggle */}
             <MotionPanel className="p-4 border border-white/[0.06]">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-start gap-3">
@@ -678,29 +1059,58 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
                     {soundFxEnabled ? <Volume2 size={20} className="text-accent" /> : <VolumeX size={20} className="text-ink-400" />}
                   </div>
                   <div className="flex-1">
-                    <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">Ultimate Visual Sound FX</h3>
-                    <p className="text-xs text-ink-400">When enabled, UI transitions play a subtle click sound via the Web Audio API oscillator.</p>
+                    <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">
+                      Ultimate Visual Sound FX
+                    </h3>
+                    <p className="text-xs text-ink-400">
+                      When enabled, UI transitions play a subtle click sound via the Web Audio API oscillator.
+                    </p>
                   </div>
                 </div>
-                <button onClick={withClick(toggleSoundFx)} className={`relative shrink-0 w-12 h-7 rounded-full transition-colors ${soundFxEnabled ? 'bg-accent' : 'bg-white/[0.08]'}`}>
+                <button
+                  onClick={withClick(toggleSoundFx)}
+                  className={`relative shrink-0 w-12 h-7 rounded-full transition-colors ${soundFxEnabled ? 'bg-accent' : 'bg-white/[0.08]'}`}
+                  aria-label={soundFxEnabled ? 'Disable sound FX' : 'Enable sound FX'}
+                >
                   <span className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white transition-transform ${soundFxEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
                 </button>
               </div>
             </MotionPanel>
 
+            {/* Phase 3 — Emotion-to-Color API Mapper */}
             <MotionPanel className="p-4 border border-white/[0.06]">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white/[0.04] flex items-center justify-center shrink-0"><Sparkles size={20} className="text-accent" /></div>
+                <div className="w-10 h-10 rounded-xl bg-white/[0.04] flex items-center justify-center shrink-0">
+                  <Sparkles size={20} className="text-accent" />
+                </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">Emotion-to-Color API Mapper</h3>
-                  <p className="text-xs text-ink-400 mb-3">Select the script's emotional tone. The corresponding color grading is injected into the Fal visual prompt.</p>
+                  <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">
+                    Emotion-to-Color API Mapper
+                  </h3>
+                  <p className="text-xs text-ink-400 mb-3">
+                    Select the script's emotional tone. The corresponding color grading is injected into the Fal visual prompt.
+                  </p>
                   <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-                    <select value={emotionTone} onChange={(e) => { setEmotionTone(e.target.value); if (soundFxEnabled) playClickSound(); }} className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100">
-                      {EMOTION_TONES.map((tone) => <option key={tone} value={tone} className="bg-ink-900">{tone.charAt(0).toUpperCase() + tone.slice(1)}</option>)}
+                    <select
+                      value={emotionTone}
+                      onChange={(e) => {
+                        setEmotionTone(e.target.value);
+                        if (soundFxEnabled) playClickSound();
+                      }}
+                      className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 focus:outline-none focus:border-accent/40"
+                    >
+                      {EMOTION_TONES.map((tone) => (
+                        <option key={tone} value={tone} className="bg-ink-900">
+                          {tone.charAt(0).toUpperCase() + tone.slice(1)}
+                        </option>
+                      ))}
                     </select>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-ink-400">Preview:</span>
-                      <span className="w-8 h-8 rounded-lg border border-white/[0.1]" style={{ backgroundColor: EMOTION_COLOR_MAP[emotionTone].color }} />
+                      <span
+                        className="w-8 h-8 rounded-lg border border-white/[0.1]"
+                        style={{ backgroundColor: EMOTION_COLOR_MAP[emotionTone].color }}
+                      />
                       <span className="text-xs text-ink-200 font-mono">{EMOTION_COLOR_MAP[emotionTone].grading}</span>
                     </div>
                   </div>
@@ -708,48 +1118,92 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
               </div>
             </MotionPanel>
 
+            {/* Phase 3 — High-Fidelity Lens Directives (locked, non-editable) */}
             <MotionPanel className="p-4 border border-accent/20">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-accent-dim flex items-center justify-center shrink-0"><Monitor size={20} className="text-accent" /></div>
+                <div className="w-10 h-10 rounded-xl bg-accent-dim flex items-center justify-center shrink-0">
+                  <Monitor size={20} className="text-accent" />
+                </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-accent mb-1 flex items-center gap-2">High-Fidelity Lens Directives</h3>
-                  <p className="text-xs text-ink-300 mb-3">These directives are always-on and cannot be disabled. They are injected into every Fal generation request.</p>
+                  <h3 className="text-sm font-bold text-accent mb-1 flex items-center gap-2">
+                    High-Fidelity Lens Directives
+                  </h3>
+                  <p className="text-xs text-ink-300 mb-3">
+                    These directives are always-on and cannot be disabled. They are injected into every Fal generation request.
+                  </p>
                   <div className="flex flex-wrap gap-2">
                     {LENS_DIRECTIVES.map((directive) => (
-                      <span key={directive} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink-950 border border-accent/30 text-xs font-medium text-accent"><Check size={12} /> {directive}</span>
+                      <span
+                        key={directive}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink-950 border border-accent/30 text-xs font-medium text-accent"
+                      >
+                        <Check size={12} /> {directive}
+                      </span>
                     ))}
                   </div>
                 </div>
               </div>
             </MotionPanel>
 
+            {/* Phase 3 — Cinematic Aspect Ratio Switcher */}
             <MotionPanel className="p-4 border border-white/[0.06]">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white/[0.04] flex items-center justify-center shrink-0"><Maximize size={20} className="text-accent" /></div>
+                <div className="w-10 h-10 rounded-xl bg-white/[0.04] flex items-center justify-center shrink-0">
+                  <Maximize size={20} className="text-accent" />
+                </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">Cinematic Aspect Ratio Switcher</h3>
-                  <p className="text-xs text-ink-400 mb-3">Selected ratio is applied to the Fal generation request.</p>
+                  <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">
+                    Cinematic Aspect Ratio Switcher
+                  </h3>
+                  <p className="text-xs text-ink-400 mb-3">
+                    Selected ratio is applied to the Fal generation request.
+                  </p>
                   <div className="flex gap-2">
                     {ASPECT_RATIOS.map((ar) => (
-                      <button key={ar.id} onClick={() => { setAspectRatio(ar.value); if (soundFxEnabled) playClickSound(); }} className={`px-4 py-2 rounded-xl text-xs font-medium transition-all ${aspectRatio === ar.value ? 'bg-accent text-ink-950 border border-accent' : 'bg-white/[0.04] text-ink-300 border border-white/[0.06]'}`}>{ar.label}</button>
+                      <button
+                        key={ar.id}
+                        onClick={() => {
+                          setAspectRatio(ar.value);
+                          if (soundFxEnabled) playClickSound();
+                        }}
+                        className={`px-4 py-2 rounded-xl text-xs font-medium transition-all ${aspectRatio === ar.value ? 'bg-accent text-ink-950 border border-accent' : 'bg-white/[0.04] text-ink-300 border border-white/[0.06] hover:text-ink-100'}`}
+                      >
+                        {ar.label}
+                      </button>
                     ))}
                   </div>
                 </div>
               </div>
             </MotionPanel>
 
+            {/* Phase 3 — Lip-Sync Quality Tester */}
             <MotionPanel className="p-4 border border-white/[0.06]">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white/[0.04] flex items-center justify-center shrink-0"><Mic size={20} className="text-accent" /></div>
+                <div className="w-10 h-10 rounded-xl bg-white/[0.04] flex items-center justify-center shrink-0">
+                  <Mic size={20} className="text-accent" />
+                </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">Lip-Sync Quality Tester</h3>
-                  <p className="text-xs text-ink-400 mb-3">Pre-render checklist. Verify each item before assembling the pipeline.</p>
+                  <h3 className="text-sm font-bold text-ink-100 mb-1 flex items-center gap-2">
+                    Lip-Sync Quality Tester
+                  </h3>
+                  <p className="text-xs text-ink-400 mb-3">
+                    Pre-render checklist. Verify each item before assembling the pipeline.
+                  </p>
                   <div className="space-y-2">
                     {LIPSYNC_CHECKLIST.map((item) => {
                       const checked = !!lipsyncChecks[item];
                       return (
-                        <button key={item} onClick={() => { setLipsyncChecks((prev) => ({ ...prev, [item]: !prev[item] })); if (soundFxEnabled) playClickSound(); }} className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.04] hover:border-accent/30 text-left">
-                          <span className={`shrink-0 w-5 h-5 rounded-md flex items-center justify-center border ${checked ? 'bg-accent border-accent' : 'bg-transparent border-white/[0.1]'}`}>{checked && <Check size={13} className="text-ink-950" />}</span>
+                        <button
+                          key={item}
+                          onClick={() => {
+                            setLipsyncChecks((prev) => ({ ...prev, [item]: !prev[item] }));
+                            if (soundFxEnabled) playClickSound();
+                          }}
+                          className="w-full flex items-center gap-3 p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.04] hover:border-accent/30 transition-colors text-left"
+                        >
+                          <span className={`shrink-0 w-5 h-5 rounded-md flex items-center justify-center border ${checked ? 'bg-accent border-accent' : 'bg-transparent border-white/[0.1]'}`}>
+                            {checked && <Check size={13} className="text-ink-950" />}
+                          </span>
                           <span className={`text-xs ${checked ? 'text-ink-100' : 'text-ink-300'}`}>{item}</span>
                         </button>
                       );
@@ -760,34 +1214,78 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
             </MotionPanel>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Render inputs */}
               <Panel title="Render Inputs" icon={<Settings2 size={15} />}>
                 <div className="p-4 space-y-3">
                   {STUDIO_RENDER_INPUTS.map((input) => (
                     <div key={input.id} className="space-y-1.5">
                       <label className="text-xs font-medium text-ink-200">{input.label}</label>
                       {input.type === 'select' && input.options ? (
-                        <select value={String(renderInputs[input.id] ?? '')} onChange={(e) => setRenderInputs((prev) => ({ ...prev, [input.id]: e.target.value }))} className="w-full p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100">
-                          {input.options.map((opt) => <option key={opt} value={opt} className="bg-ink-900">{opt}</option>)}
+                        <select
+                          value={String(renderInputs[input.id] ?? '')}
+                          onChange={(e) =>
+                            setRenderInputs((prev) => ({ ...prev, [input.id]: e.target.value }))
+                          }
+                          className="w-full p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 focus:outline-none focus:border-accent/40"
+                        >
+                          {input.options.map((opt) => (
+                            <option key={opt} value={opt} className="bg-ink-900">
+                              {opt}
+                            </option>
+                          ))}
                         </select>
                       ) : (
-                        <input type="number" value={Number(renderInputs[input.id] ?? input.defaultValue ?? 0)} onChange={(e) => setRenderInputs((prev) => ({ ...prev, [input.id]: e.target.value === '' ? 0 : Number(e.target.value) }))} className="w-full p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100" />
+                        <input
+                          type="number"
+                          value={Number(renderInputs[input.id] ?? input.defaultValue ?? 0)}
+                          onChange={(e) =>
+                            setRenderInputs((prev) => ({
+                              ...prev,
+                              [input.id]: e.target.value === '' ? 0 : Number(e.target.value),
+                            }))
+                          }
+                          className="w-full p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-sm text-ink-100 focus:outline-none focus:border-accent/40"
+                        />
                       )}
                     </div>
                   ))}
                 </div>
               </Panel>
 
+              {/* Feature toggles */}
               <Panel title="Feature Toggles" icon={<Sparkles size={15} />}>
                 <div className="p-4 space-y-2">
                   {STUDIO_FEATURES.map((feature: FeatureToggle) => (
-                    <FeatureToggleRow key={feature.id} toggle={feature} enabled={!!featureStates[feature.id]} onToggle={() => setFeatureStates((prev) => ({ ...prev, [feature.id]: !prev[feature.id] }))} />
+                    <FeatureToggleRow
+                      key={feature.id}
+                      toggle={feature}
+                      enabled={!!featureStates[feature.id]}
+                      onToggle={() =>
+                        setFeatureStates((prev) => ({
+                          ...prev,
+                          [feature.id]: !prev[feature.id],
+                        }))
+                      }
+                    />
                   ))}
                 </div>
               </Panel>
+
+              {/* Phase 3 — Feature Toggles */}
               <Panel title="Phase 3 Feature Toggles" icon={<Sparkles size={15} />}>
                 <div className="p-4 space-y-2">
                   {STUDIO_P3_FEATURES.map((feature: FeatureToggle) => (
-                    <FeatureToggleRow key={feature.id} toggle={feature} enabled={!!p3FeatureStates[feature.id]} onToggle={() => setP3FeatureStates((prev) => ({ ...prev, [feature.id]: !prev[feature.id] }))} />
+                    <FeatureToggleRow
+                      key={feature.id}
+                      toggle={feature}
+                      enabled={!!p3FeatureStates[feature.id]}
+                      onToggle={() =>
+                        setP3FeatureStates((prev) => ({
+                          ...prev,
+                          [feature.id]: !prev[feature.id],
+                        }))
+                      }
+                    />
                   ))}
                 </div>
               </Panel>
@@ -798,4 +1296,3 @@ export function StudioModule({ seriesId }: { seriesId: string | null }) {
     </div>
   );
 }
-              

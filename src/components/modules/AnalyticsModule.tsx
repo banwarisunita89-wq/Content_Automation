@@ -1,4 +1,3 @@
-// --- src/modules/AnalyticsModule.tsx ---
 import { useState, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -8,8 +7,7 @@ import {
   Gauge, Calendar, MessageSquareWarning, Flame,
 } from 'lucide-react';
 
-// FIX: Swapped useApiVaultStore with useBackendStatusStore for zero-trust security
-import { useActiveStore, useToastStore, useBackendStatusStore } from '../../lib/stores';
+import { useActiveStore, useToastStore, useApiVaultStore } from '../../lib/stores';
 import {
   useEpisodesQuery,
   useAnalyticsQuery,
@@ -120,10 +118,7 @@ function computeInstagramMetrics(episodeId: string): IGCard[] {
 export function AnalyticsModule({ seriesId }: { seriesId: string | null }) {
   const activeStore = useActiveStore();
   const addToast = useToastStore((s) => s.addToast);
-  
-  // FIX: Secure backend read (Assuming keys are managed server-side)
-  const backendStatus = useBackendStatusStore((s) => s.services);
-  const hasInstaKey = backendStatus.supabase;
+  const hasInstaKey = useApiVaultStore((s) => s.hasKey('instagram_graph_key'));
 
   const { data: episodes = [], isLoading: episodesLoading } = useEpisodesQuery(seriesId);
   const [activeEpisodeId, setActiveEpisodeId] = useState<string | null>(null);
@@ -678,7 +673,7 @@ export function AnalyticsModule({ seriesId }: { seriesId: string | null }) {
                 </div>
               </Panel>
 
-               {/* Feature toggles */}
+              {/* Feature toggles */}
               <Panel title="Analytics Feature Configuration" icon={<Activity size={15} />}>
                 <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {ANALYTICS_FEATURES.map((toggle) => (
